@@ -131,6 +131,21 @@
   #term { flex: 1; min-height: 0; padding: 6px 0 0 8px; }
   [hidden] { display: none !important; }
 
+  /* ---- menu mở bằng ---- */
+  .split { display: inline-flex; }
+  .split button:first-child { border-radius: 6px 0 0 6px; }
+  .split button:last-child { border-radius: 0 6px 6px 0; border-left: none; padding: 2px 4px; }
+  #openMenu { position: fixed; z-index: 20; min-width: 220px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.4); padding: 4px; }
+  #openMenu .mi { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 5px; cursor: pointer; }
+  #openMenu .mi:hover { background: var(--panel2); }
+  #openMenu .mi .l { flex: 1; }
+  #openMenu .mi .star { color: var(--muted); padding: 0 4px; }
+  #openMenu .mi .star.on { color: var(--warn); }
+  #openMenu .mi .star:hover, #openMenu .mi .rm:hover { color: var(--text); }
+  #openMenu .mi .rm { color: var(--muted); padding: 0 4px; }
+  #openMenu .sep2 { height: 1px; background: var(--border); margin: 4px 0; }
+  #openMenu .hint { color: var(--muted); font-size: 11px; padding: 2px 8px 4px; }
+
   /* ---- ô lệnh ---- */
   .cmdbar { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-top: 1px solid var(--border); background: #0b0d11; font-family: var(--mono); }
   .cmdbar .prompt { color: var(--accent); white-space: nowrap; font-size: 12px; max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
@@ -144,6 +159,8 @@
   <button id="changeRoot" title="Chọn thư mục khác">📂 Đổi folder</button>
   <button id="rescan" title="Quét lại module & trạng thái git">↻ Rescan</button>
 </header>
+
+<div id="openMenu" hidden></div>
 
 <div id="branchModal" class="overlay" hidden>
   <div class="pick-card">
@@ -328,6 +345,7 @@ function applyData(data) {
   S.modules = Object.fromEntries(data.modules.map((m) => [m.name, m]));
   S.order = data.modules.map((m) => m.name);
   S.presets = data.presets || {};
+  if (data.openers) S.openers = data.openers;
   setRunning(data.running);
   if (firstLoad) {
     firstLoad = false;
@@ -493,8 +511,7 @@ function rowHtml(m) {
       <button class="sm" data-build="${esc(m.name)}" title="Build riêng ${m.parent ? 'module này (-pl ' + esc(m.rel) + ')' : 'project này'}" ${S.running ? 'disabled' : ''}>🔨</button>
       ${app}
       <button class="sm" data-term="${esc(m.name)}" title="Mở terminal tại thư mục này">⌨</button>
-      <button class="sm" data-open="${esc(m.name)}" title="Mở trong Finder">📁</button>
-      <button class="sm" data-idea="${esc(m.name)}" title="Mở bằng IntelliJ IDEA">IJ</button>
+      <span class="split"><button class="sm" data-open="${esc(m.name)}" title="Mở bằng ${esc(defaultOpenerLabel())}">↗</button><button class="sm" data-openmenu="${esc(m.name)}" title="Chọn app để mở">▾</button></span>
     </td>`;
 }
 
@@ -853,8 +870,8 @@ $('rows').addEventListener('click', (ev) => {
   }
   const br = t.closest('[data-branch]');
   if (br) return openBranches(br.dataset.branch);
-  if (t.dataset.open) return api('/api/open', { module: t.dataset.open });
-  if (t.dataset.idea) return api('/api/open', { module: t.dataset.idea, app: 'IntelliJ IDEA' });
+  if (t.dataset.open) return openModule(t.dataset.open);
+  if (t.dataset.openmenu) return showOpenMenu(t.dataset.openmenu, t);
   const tr = t.closest('tr.row');
   if (tr) selectModule(tr.dataset.row);
 });
@@ -929,6 +946,72 @@ $('pickNative').addEventListener('click', async () => {
 });
 $('logFilter').addEventListener('input', renderLog);
 $('errOnly').addEventListener('change', renderLog);
+
+// ------------------------------------------------------------- mở bằng ----
+
+S.openers = { list: [], default: null };
+const defaultOpenerLabel = () => S.openers.list.find((o) => o.id === S.openers.default)?.label || 'app mặc định';
+
+async function openModule(name, opener) {
+  const r = await api('/api/open', { module: name, opener });
+  if (r.error) alert(`Không mở được: ${r.error}`);
+}
+
+let menuModule = null;
+
+function renderOpenMenu() {
+  const { list, default: def } = S.openers;
+  $('openMenu').innerHTML = list.map((o) => `
+    <div class="mi" data-useopener="${esc(o.id)}">
+      <span class="l">${esc(o.label)}</span>
+      ${o.custom ? `<span class="rm" data-rmopener="${esc(o.app)}" title="Xoá khỏi danh sách">×</span>` : ''}
+      <span class="star ${o.id === def ? 'on' : ''}" data-defopener="${esc(o.id)}" title="${o.id === def ? 'App mặc định' : 'Đặt làm mặc định cho nút ↗'}">${o.id === def ? '★' : '☆'}</span>
+    </div>`).join('') + `
+    <div class="sep2"></div>
+    <div class="mi" data-addopener="1"><span class="l">+ Thêm app khác…</span></div>
+    <div class="mi" data-refreshopener="1"><span class="l">↻ Dò lại app đã cài</span></div>
+    <div class="hint">★ = app mặc định của nút ↗</div>`;
+}
+
+function showOpenMenu(name, anchor) {
+  menuModule = name;
+  renderOpenMenu();
+  const menu = $('openMenu');
+  menu.hidden = false;
+  const r = anchor.getBoundingClientRect();
+  const w = menu.offsetWidth;
+  const h = menu.offsetHeight;
+  menu.style.left = `${Math.max(8, Math.min(r.right - w, innerWidth - w - 8))}px`;
+  menu.style.top = `${r.bottom + h + 4 > innerHeight ? Math.max(8, r.top - h - 4) : r.bottom + 4}px`;
+}
+
+async function updateOpeners(body) {
+  S.openers = body ? await api('/api/openers', body) : await api('/api/openers?refresh=1');
+  renderOpenMenu();
+  renderRows();
+}
+
+$('openMenu').addEventListener('click', async (ev) => {
+  const t = ev.target;
+  if (t.dataset.defopener) return updateOpeners({ default: t.dataset.defopener });
+  if (t.dataset.rmopener) return updateOpeners({ removeCustom: t.dataset.rmopener });
+  const mi = t.closest('.mi');
+  if (!mi) return;
+  if (mi.dataset.addopener) {
+    const app = prompt('Tên app trong thư mục Applications (vd: "Android Studio", "Postman"):', '');
+    if (app) await updateOpeners({ addCustom: app });
+    return;
+  }
+  if (mi.dataset.refreshopener) return updateOpeners();
+  if (mi.dataset.useopener) {
+    $('openMenu').hidden = true;
+    openModule(menuModule, mi.dataset.useopener);
+  }
+});
+document.addEventListener('click', (ev) => {
+  if (!$('openMenu').hidden && !ev.target.closest('#openMenu, [data-openmenu]')) $('openMenu').hidden = true;
+});
+document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') $('openMenu').hidden = true; });
 
 // ---------------------------------------------------------------- branch ----
 

@@ -45,6 +45,7 @@ const state = {
   jdks: [],
   busy: new Set(),   // module đang chạy lệnh git/exec
   terms: {},         // id -> terminal (PTY)
+  openers: [],       // app đã cài để mở thư mục
   apps: {},          // name -> app đang chạy (spring-boot:run, ...)
   clients: new Set(),
   running: false,
@@ -493,6 +494,63 @@ function closeTerm(id) {
   delete state.terms[id];
 }
 
+// ------------------------------------------------------------- mở bằng ----
+
+// App để mở thư mục module (macOS). Nhận diện bằng bundle id để tránh trùng tên.
+const OPENERS = [
+  { id: 'vscode', label: 'VS Code', bundles: ['com.microsoft.VSCode'] },
+  { id: 'idea', label: 'IntelliJ IDEA', bundles: ['com.jetbrains.intellij', 'com.jetbrains.intellij.ce'] },
+  { id: 'cursor', label: 'Cursor', bundles: ['com.todesktop.230313mzl4w4u92'] },
+  { id: 'zed', label: 'Zed', bundles: ['dev.zed.Zed'] },
+  { id: 'sublime', label: 'Sublime Text', bundles: ['com.sublimetext.4', 'com.sublimetext.3'] },
+  { id: 'terminal', label: 'Terminal', bundles: ['com.apple.Terminal'] },
+  { id: 'iterm', label: 'iTerm', bundles: ['com.googlecode.iterm2'] },
+  { id: 'warp', label: 'Warp', bundles: ['dev.warp.Warp-Stable'] },
+  { id: 'ghostty', label: 'Ghostty', bundles: ['com.mitchellh.ghostty'] },
+  { id: 'fork', label: 'Fork', bundles: ['com.DanPristupov.Fork'] },
+  { id: 'sourcetree', label: 'Sourcetree', bundles: ['com.torusknot.SourceTreeNotMAS'] },
+  { id: 'github', label: 'GitHub Desktop', bundles: ['com.github.GitHubClient'] },
+];
+
+function mdfind(bundle) {
+  return new Promise((resolve) => {
+    execFile('mdfind', [`kMDItemCFBundleIdentifier == '${bundle}'`], { timeout: 5000 },
+      (err, stdout) => resolve(!err && stdout.trim() ? bundle : null));
+  });
+}
+
+async function detectOpeners() {
+  if (process.platform !== 'darwin') return [{ id: 'finder', label: 'Trình quản lý file' }];
+  const found = await Promise.all(OPENERS.map(async (o) => {
+    for (const b of o.bundles) if (await mdfind(b)) return { id: o.id, label: o.label, bundle: b };
+    return null;
+  }));
+  return [...found.filter(Boolean), { id: 'finder', label: 'Finder' }];
+}
+
+function openerSettings() {
+  const cfg = (state.saved.openers ||= { default: null, custom: [] });
+  const list = [
+    ...state.openers,
+    ...cfg.custom.map((app) => ({ id: `custom:${app}`, label: app, app, custom: true })),
+  ];
+  const def = list.find((o) => o.id === cfg.default) || list.find((o) => o.id === 'vscode') || list[list.length - 1];
+  return { list, default: def?.id };
+}
+
+function openWith(openerId, dir) {
+  const { list, default: def } = openerSettings();
+  const o = list.find((x) => x.id === (openerId || def));
+  if (!o) return Promise.resolve(`Không tìm thấy app: ${openerId}`);
+  const cmd = process.platform !== 'darwin' ? ['xdg-open', dir]
+    : o.bundle ? ['open', '-b', o.bundle, dir]
+      : o.app ? ['open', '-a', o.app, dir]
+        : ['open', dir];
+  return new Promise((resolve) => {
+    execFile(cmd[0], cmd.slice(1), { timeout: 15000 }, (err, stdout, stderr) => resolve(err ? (stderr || err.message).trim() : null));
+  });
+}
+
 // ----------------------------------------------------------------- apps ----
 
 // Lệnh run mặc định, chạy từ buildDir (thư mục project cha):
@@ -770,6 +828,7 @@ function overview() {
     running: state.running,
     modules: Object.values(state.modules).map((m) => ({ ...m, app: appInfo(m.name), runCmd: runCmdOf(m) })),
     jdks: state.jdks,
+    openers: openerSettings(),
     presets: state.root ? rootData().presets : {},
     options: state.saved.options,
   };
@@ -961,11 +1020,28 @@ const routes = {
   'POST /api/open': async (req, res) => {
     const data = await readBody(req);
     const mod = state.modules[data.module];
-    if (mod) {
-      const args = data.app ? ['-a', data.app, mod.path] : [mod.path];
-      spawn('open', args, { detached: true, stdio: 'ignore' }).unref();
+    if (!mod) return sendJson(res, { error: 'Không có module' }, 404);
+    const err = await openWith(data.opener, mod.path);
+    sendJson(res, err ? { error: err } : { ok: true });
+  },
+
+  'GET /api/openers': async (req, res, url) => {
+    if (url.searchParams.get('refresh')) state.openers = await detectOpeners();
+    sendJson(res, openerSettings());
+  },
+
+  'POST /api/openers': async (req, res) => {
+    const data = await readBody(req);
+    const cfg = (state.saved.openers ||= { default: null, custom: [] });
+    if (data.default) cfg.default = data.default;
+    const app = String(data.addCustom || '').trim().replace(/\.app$/, '');
+    if (app && !cfg.custom.includes(app)) cfg.custom.push(app);
+    if (data.removeCustom) {
+      cfg.custom = cfg.custom.filter((a) => a !== data.removeCustom);
+      if (cfg.default === `custom:${data.removeCustom}`) cfg.default = null;
     }
-    sendJson(res, { ok: !!mod });
+    save();
+    sendJson(res, openerSettings());
   },
 };
 
@@ -1007,7 +1083,7 @@ function watchUi() {
 }
 
 (async () => {
-  state.jdks = await listJdks();
+  [state.jdks, state.openers] = await Promise.all([listJdks(), detectOpeners()]);
   // Dev: không truyền --root thì mở lại folder dùng gần nhất
   const root = ARGS.root || (ARGS.dev && state.saved.recentRoots.find((r) => fs.existsSync(r)));
   if (root) {

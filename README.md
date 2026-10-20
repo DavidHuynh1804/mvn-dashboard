@@ -51,7 +51,8 @@ Tool scan mọi thư mục con có `pom.xml`. Nếu bản thân folder đã ch�
 - **Đổi branch:** bấm vào tag branch của module (`⎇ main ▾`) để mở danh sách branch local và remote, có ô tìm kiếm, bấm để checkout (branch remote sẽ được tạo local tracking). Có nút Fetch, Pull (`--ff-only`) và cập nhật submodule.
 - **Ô lệnh** dưới khung log: gõ lệnh, lệnh chạy trong thư mục của module đang xem, với `JAVA_HOME` đúng phiên bản. Dùng ↑/↓ để xem lại lịch sử lệnh, nút ■ để dừng, gõ `clear` để xoá log. Ô này không dành cho lệnh tương tác (lệnh cần nhập liệu sẽ nhận EOF).
 - Log realtime, tô màu lỗi/cảnh báo, có ô lọc và chế độ "Chỉ lỗi". Nút 🗑 Clear xoá log của module đang xem; Shift+click để xoá log tất cả module.
-- Preset nhóm module (lưu riêng theo từng folder). Có nút dừng build, thông báo desktop khi build xong, mở module trong Finder hoặc IntelliJ.
+- Preset nhóm module (lưu riêng theo từng folder). Có nút dừng build và thông báo desktop khi build xong.
+- **Mở bằng:** nút ↗ mở thư mục module bằng app mặc định (mặc định là VS Code). Menu ▾ cho chọn app khác (IntelliJ, Cursor, Zed, Terminal, iTerm, Warp, Fork, Finder, …). Tool chỉ hiện những app đã cài. Bấm ☆ để đặt mặc định; "+ Thêm app khác…" để thêm app bất kỳ trong Applications.
 
 ## Dữ liệu
 
