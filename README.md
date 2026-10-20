@@ -38,6 +38,11 @@ Tool scan mọi thư mục con có `pom.xml`. Nếu bản thân folder đã ch�
 
 ## Tính năng
 
+- **Dạng cây:** project aggregator hiện các module Maven con bên dưới (đóng/mở bằng ▾). Module con là git submodule (ví dụ `common-entities`) có tag `submodule` và branch riêng.
+- **Build độc lập:** 🔨 trên project build cả reactor; 🔨 trên module con chạy `./mvnw -pl <module>` từ thư mục project cha. Nếu chọn cả cha lẫn con thì chỉ build cha.
+- **Run app:** ▶ chạy app (mặc định `./mvnw -pl <module app> spring-boot:run`), ■ để dừng. Lệnh run sửa được ở tab **App** và được lưu riêng theo từng module. Tool tự nhận biết khi app khởi động xong và hiện port kèm link. Khi app của project đang chạy thì không build được project đó (vì `clean` sẽ xoá `target`).
+- **Terminal:** tab **Terminal** (hoặc nút ⌨) mở shell tương tác thật tại thư mục module, kèm `JAVA_HOME` đúng phiên bản. Mỗi module có một phiên riêng, giữ nguyên khi chuyển qua lại. Cần `python3` (có sẵn trên macOS) và Internet ở lần đầu để tải xterm.js.
+
 - Mỗi module hiện artifact, version, phiên bản Java, branch git, số file chưa commit, số commit ahead/behind.
 - Chọn nhiều module rồi build với `clean install`, `clean package`, … hoặc goal tuỳ chỉnh. Có tuỳ chọn `-DskipTests`, `-o`, `-U`, profile và args thêm.
 - Tự chọn JDK theo `java.version` trong pom (macOS, qua `java_home`), hoặc chọn tay.

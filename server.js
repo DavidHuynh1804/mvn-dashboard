@@ -44,6 +44,8 @@ const state = {
   procs: {},        // name -> ChildProcess
   jdks: [],
   busy: new Set(),   // module đang chạy lệnh git/exec
+  terms: {},         // id -> terminal (PTY)
+  apps: {},          // name -> app đang chạy (spring-boot:run, ...)
   clients: new Set(),
   running: false,
   cancelRequested: false,
@@ -102,6 +104,10 @@ function parsePom(file) {
     version: tag(top, 'version') || tag(parent, 'version'),
     packaging: tag(top, 'packaging') || 'jar',
     javaVersion: tag(xml, 'java\\.version') || tag(xml, 'maven\\.compiler\\.release') || tag(xml, 'maven\\.compiler\\.source'),
+    hasBoot: xml.includes('spring-boot-maven-plugin'),
+    // <modules> cấp project (bỏ qua <modules> nằm trong <profiles>)
+    modules: [...(xml.replace(/<profiles>[\s\S]*?<\/profiles>/g, '').match(/<modules>([\s\S]*?)<\/modules>/) || ['', ''])[1]
+      .matchAll(/<module>\s*([^<]+?)\s*<\/module>/g)].map((m) => m[1]),
     rawDeps: deps,
   };
 }
@@ -144,15 +150,19 @@ function git(cwd, args) {
 
 async function gitInfo(dir) {
   if (!fs.existsSync(path.join(dir, '.git'))) return null;
-  const [branch, status, ab] = await Promise.all([
+  const [branch, status, ab, sha] = await Promise.all([
     git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']),
     git(dir, ['status', '--porcelain']),
     git(dir, ['rev-list', '--left-right', '--count', '@{u}...HEAD']),
+    git(dir, ['rev-parse', '--short', 'HEAD']),
   ]);
   if (branch == null) return null;
+  // submodule thường ở trạng thái detached HEAD
+  const detached = branch.trim() === 'HEAD';
   const [behind, ahead] = (ab || '0 0').trim().split(/\s+/).map(Number);
   return {
-    branch: branch.trim(),
+    branch: detached ? `detached @ ${(sha || '').trim()}` : branch.trim(),
+    detached,
     dirty: (status || '').split('\n').filter((l) => l.trim()).length,
     ahead: ahead || 0,
     behind: behind || 0,
@@ -168,32 +178,71 @@ async function scan() {
     .sort((a, b) => a.name.localeCompare(b.name));
   if (fs.existsSync(path.join(state.root, 'pom.xml'))) dirs.unshift({ name: `${path.basename(state.root)} (root)`, dir: state.root });
 
-  await Promise.all(dirs.map(async ({ name, dir }) => {
-    let info;
+  const readPom = (name, dir) => {
     try {
-      info = parsePom(path.join(dir, 'pom.xml'));
+      return parsePom(path.join(dir, 'pom.xml'));
     } catch (e) {
-      info = { artifactId: name, rawDeps: [], error: String(e) };
+      return { artifactId: name, rawDeps: [], modules: [], error: String(e) };
     }
-    found[name] = {
+  };
+
+  // Mỗi project top-level + các module Maven con (thường có common-entities là git submodule).
+  // Module con build từ thư mục cha bằng `-pl <rel>` để dùng chung wrapper/reactor.
+  const order = [];
+  await Promise.all(dirs.map(async ({ name, dir }, i) => {
+    const info = readPom(name, dir);
+    const top = {
       ...info,
       name,
       path: dir,
+      parent: null,
+      rel: null,
       // mvnw chỉ dùng được khi có kèm .mvn/wrapper/maven-wrapper.properties
       hasWrapper: fs.existsSync(path.join(dir, 'mvnw'))
         && fs.existsSync(path.join(dir, '.mvn', 'wrapper', 'maven-wrapper.properties')),
+      buildDir: dir,
       git: await gitInfo(dir),
+      children: [],
+      canRun: true,
     };
+    found[name] = top;
+    const kids = await Promise.all(info.modules
+      .filter((rel) => fs.existsSync(path.join(dir, rel, 'pom.xml')))
+      .map(async (rel) => {
+        const cdir = path.join(dir, rel);
+        const cinfo = readPom(rel, cdir);
+        const isSubmodule = fs.existsSync(path.join(cdir, '.git'));
+        return {
+          ...cinfo,
+          javaVersion: cinfo.javaVersion || info.javaVersion,
+          name: `${name}/${rel}`,
+          path: cdir,
+          parent: name,
+          rel,
+          isSubmodule,
+          hasWrapper: top.hasWrapper,
+          buildDir: dir,
+          // module con không phải submodule dùng chung git với project cha
+          git: isSubmodule ? await gitInfo(cdir) : null,
+          children: [],
+          canRun: !isSubmodule,
+        };
+      }));
+    kids.sort((a, b) => b.isSubmodule - a.isSubmodule);
+    for (const k of kids) found[k.name] = k;
+    top.children = kids.map((k) => k.name);
+    order[i] = [name, ...top.children];
   }));
 
-  // Dependency nội bộ: khớp artifactId giữa các module đã scan
-  const byArtifact = {};
-  for (const [n, m] of Object.entries(found)) if (m.artifactId) byArtifact[m.artifactId] = n;
+  // Dependency nội bộ: khớp artifactId, ưu tiên module cùng project cha
+  const byArtifact = (names) => Object.fromEntries(names.map((n) => [found[n].artifactId, n]));
+  const topLevel = byArtifact(dirs.map((d) => d.name));
   const history = rootData().history;
   const ordered = {};
-  for (const { name: n } of dirs) {
+  for (const n of order.flat()) {
     const m = found[n];
-    m.deps = [...new Set(m.rawDeps.map((a) => byArtifact[a]).filter((d) => d && d !== n))].sort();
+    const scope = m.parent ? byArtifact(found[m.parent].children) : topLevel;
+    m.deps = [...new Set(m.rawDeps.map((a) => scope[a]).filter((d) => d && d !== n))].sort();
     delete m.rawDeps;
     const old = state.modules[n] || {};
     m.status = old.status || 'idle';
@@ -211,6 +260,9 @@ async function setRoot(dir) {
   const root = path.resolve(expandHome(dir));
   if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) throw new Error(`Không tìm thấy thư mục: ${root}`);
   if (root !== state.root) {
+    if (Object.keys(state.apps).some(appRunning)) throw new Error('Dừng các app đang chạy trước khi đổi folder');
+    Object.keys(state.terms).forEach(closeTerm);
+    state.apps = {};
     state.root = root;
     state.modules = {};
     state.logs = {};
@@ -342,11 +394,217 @@ function killModule(name) {
   return true;
 }
 
+// ------------------------------------------------------------ terminal ----
+
+// Node không tạo được PTY nếu không có module native, nên dùng một helper Python nhỏ:
+// stdin/stdout nối với PTY, fd 3 nhận lệnh đổi kích thước dạng "rows cols\n".
+const PTY_HELPER = `
+import os, pty, sys, select, fcntl, termios, struct, signal
+shell = sys.argv[1]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(shell, [shell, '-il'])
+def resize(r, c):
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', r, c, 0, 0))
+resize(int(sys.argv[2]), int(sys.argv[3]))
+fds = [fd, 0, 3]; buf = b''
+while True:
+    try:
+        r, _, _ = select.select(fds, [], [])
+    except InterruptedError:
+        continue
+    if fd in r:
+        try:
+            data = os.read(fd, 65536)
+        except OSError:
+            data = b''
+        if not data:
+            break
+        os.write(1, data)
+    if 0 in r:
+        data = os.read(0, 65536)
+        if not data:
+            fds.remove(0); os.kill(pid, signal.SIGHUP)
+        else:
+            os.write(fd, data)
+    if 3 in r:
+        data = os.read(3, 1024)
+        if not data:
+            fds.remove(3)
+        buf += data
+        while b'\\n' in buf:
+            line, buf = buf.split(b'\\n', 1)
+            p = line.split()
+            if len(p) == 2:
+                resize(int(p[0]), int(p[1]))
+_, status = os.waitpid(pid, 0)
+sys.exit(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 1)
+`;
+const PYTHON = ['/usr/bin/python3', '/opt/homebrew/bin/python3', '/usr/local/bin/python3'].find((p) => fs.existsSync(p)) || 'python3';
+const TERM_BUFFER = 200 * 1024;
+const ROOT_TERM = '__root__';
+
+function javaEnv(mod) {
+  const env = { ...process.env };
+  const javaHome = mod && resolveJavaHome(mod, state.saved.options || {});
+  if (javaHome) {
+    env.JAVA_HOME = javaHome;
+    env.PATH = path.join(javaHome, 'bin') + path.delimiter + env.PATH;
+  }
+  return env;
+}
+
+function openTerm(id, rows, cols) {
+  const existing = state.terms[id];
+  if (existing) return existing;
+  const mod = id === ROOT_TERM ? null : state.modules[id];
+  const cwd = mod ? mod.path : state.root || os.homedir();
+  const env = { ...javaEnv(mod), TERM: 'xterm-256color', COLORTERM: 'truecolor' };
+  const shell = process.env.SHELL || '/bin/zsh';
+  const child = spawn(PYTHON, ['-c', PTY_HELPER, shell, String(rows || 24), String(cols || 80)],
+    { cwd, env, detached: true, stdio: ['pipe', 'pipe', 'pipe', 'pipe'] });
+  const term = { id, cwd, child, buffer: '', end: 0 };
+  state.terms[id] = term;
+  const decoder = new (require('node:string_decoder').StringDecoder)('utf8');
+  const emit = (data) => {
+    if (!data) return;
+    term.end += data.length;
+    term.buffer = (term.buffer + data).slice(-TERM_BUFFER);
+    broadcast({ type: 'term', id, data, end: term.end });
+  };
+  child.stdout.on('data', (d) => emit(decoder.write(d)));
+  child.stderr.on('data', (d) => emit(decoder.write(d)));
+  child.on('error', (e) => emit(`\r\n[dashboard] Không mở được terminal (${PYTHON}): ${e.message}\r\n`));
+  child.on('close', (code) => {
+    if (state.terms[id] === term) delete state.terms[id];
+    broadcast({ type: 'termexit', id, code });
+  });
+  return term;
+}
+
+function closeTerm(id) {
+  const term = state.terms[id];
+  if (!term) return;
+  try {
+    process.kill(-term.child.pid, 'SIGHUP');
+  } catch {
+    /* đã thoát */
+  }
+  delete state.terms[id];
+}
+
+// ----------------------------------------------------------------- apps ----
+
+// Lệnh run mặc định, chạy từ buildDir (thư mục project cha):
+// - module con: -pl <rel>
+// - project có module con: chọn module app (có spring-boot plugin, không phải submodule)
+function defaultRunCmd(mod) {
+  const mvn = mod.hasWrapper ? './mvnw' : 'mvn';
+  let target = mod.rel;
+  if (!target && mod.children?.length) {
+    const kids = mod.children.map((n) => state.modules[n]).filter(Boolean);
+    const app = kids.find((k) => k.hasBoot && !k.isSubmodule) || kids.find((k) => !k.isSubmodule);
+    target = app?.rel;
+  }
+  return target ? `${mvn} -pl ${target} spring-boot:run` : `${mvn} spring-boot:run`;
+}
+
+const fileSafe = (name) => name.replace(/[\\/]/g, '__');
+
+// Module và các module "họ hàng" dùng chung thư mục build (cha + con)
+function family(name) {
+  const m = state.modules[name];
+  if (!m) return [];
+  const top = m.parent ? state.modules[m.parent] : m;
+  return [top.name, ...top.children];
+}
+
+function runCmdOf(mod) {
+  return rootData().runCmds?.[mod.name] || defaultRunCmd(mod);
+}
+
+function appInfo(name) {
+  const a = state.apps[name];
+  return a ? { status: a.status, port: a.port, startedAt: a.startedAt } : null;
+}
+
+function setAppStatus(name, status, extra = {}) {
+  const a = state.apps[name];
+  if (!a) return;
+  Object.assign(a, { status }, extra);
+  broadcast({ type: 'app', module: name, app: appInfo(name) });
+}
+
+const APP_UP_RE = /Started \S+ in [\d.]+ seconds/;
+const APP_PORT_RE = /(?:Tomcat|Netty|Undertow|Jetty)[^\n]*?started on port(?:s|\(s\))?:?\s*(\d+)/i;
+
+function startApp(name, cmd) {
+  const mod = state.modules[name];
+  const key = `${name}#app`;
+  state.logs[key] = [];
+  const dir = logDir();
+  fs.mkdirSync(dir, { recursive: true });
+  const logFile = fs.createWriteStream(path.join(dir, `${fileSafe(name)}.app.log`));
+  const shell = process.env.SHELL || '/bin/sh';
+  appendLog(key, `$ cd ${mod.buildDir} && ${cmd}`, logFile);
+  const child = spawn(shell, ['-lc', cmd], { cwd: mod.buildDir, env: javaEnv(mod), detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  state.apps[name] = { child, status: 'starting', port: null, startedAt: Date.now(), stopping: false };
+  setAppStatus(name, 'starting');
+
+  let partial = '';
+  const onData = (chunk) => {
+    const lines = (partial + chunk.toString()).split(/\r?\n/);
+    partial = lines.pop();
+    for (const l of lines) {
+      appendLog(key, l, logFile);
+      const a = state.apps[name];
+      if (!a || a.child !== child) continue;
+      const port = l.match(APP_PORT_RE);
+      if (port) setAppStatus(name, a.status, { port: Number(port[1]) });
+      if (a.status === 'starting' && APP_UP_RE.test(l)) setAppStatus(name, 'up');
+    }
+  };
+  child.stdout.on('data', onData);
+  child.stderr.on('data', onData);
+  child.on('error', (e) => appendLog(key, `[dashboard] Không chạy được lệnh: ${e.message}`, logFile));
+  child.on('close', (code, signal) => {
+    if (partial) appendLog(key, partial, logFile);
+    const a = state.apps[name];
+    appendLog(key, `[dashboard] app dừng (exit=${code ?? signal})`, logFile);
+    logFile.end();
+    if (a && a.child === child) {
+      setAppStatus(name, a.stopping || code === 0 ? 'stopped' : 'crashed', { port: null });
+      clearTimeout(a.killTimer);
+    }
+  });
+}
+
+function stopApp(name) {
+  const a = state.apps[name];
+  if (!a || !['starting', 'up'].includes(a.status)) return false;
+  a.stopping = true;
+  setAppStatus(name, 'stopping');
+  const kill = (sig) => {
+    try {
+      process.kill(-a.child.pid, sig);
+    } catch {
+      /* đã thoát */
+    }
+  };
+  kill('SIGTERM');
+  // Spring Boot tắt êm thường dưới vài giây; quá 10s thì kill hẳn
+  a.killTimer = setTimeout(() => kill('SIGKILL'), 10000);
+  return true;
+}
+
+const appRunning = (name) => ['starting', 'up', 'stopping'].includes(state.apps[name]?.status);
+
 // --------------------------------------------------------------- builds ----
 
 function buildCommand(mod, opts) {
   const useWrapper = mod.hasWrapper && opts.useWrapper !== false;
   const cmd = [useWrapper ? './mvnw' : 'mvn', '-B', ...(opts.goals || 'clean install').split(/\s+/).filter(Boolean)];
+  if (mod.rel) cmd.push('-pl', mod.rel);
   if (opts.skipTests) cmd.push('-DskipTests');
   if (opts.offline) cmd.push('-o');
   if (opts.updateSnapshots) cmd.push('-U');
@@ -384,16 +642,16 @@ function runModule(name, opts) {
     state.logs[name] = [];
     const dir = logDir();
     fs.mkdirSync(dir, { recursive: true });
-    const logFile = fs.createWriteStream(path.join(dir, `${name}.log`));
+    const logFile = fs.createWriteStream(path.join(dir, `${fileSafe(name)}.log`));
     const start = Date.now();
     setStatus(name, 'running', { startedAt: start, duration: null });
-    appendLog(name, `$ cd ${mod.path} && ${cmd.join(' ')}`, logFile);
+    appendLog(name, `$ cd ${mod.buildDir} && ${cmd.join(' ')}`, logFile);
     appendLog(name, javaHome
       ? `[dashboard] JAVA_HOME=${javaHome} (pom yêu cầu Java ${mod.javaVersion || '?'})`
       : `[dashboard] Không tìm thấy JDK ${mod.javaVersion || ''} phù hợp, dùng Java mặc định của hệ thống`, logFile);
 
     // detached: tạo process group riêng để cancel kill được cả cây process
-    const child = spawn(cmd[0], cmd.slice(1), { cwd: mod.path, env, detached: true });
+    const child = spawn(cmd[0], cmd.slice(1), { cwd: mod.buildDir, env, detached: true });
     state.procs[name] = child;
 
     let partial = '';
@@ -428,7 +686,7 @@ function runModule(name, opts) {
 // Chạy theo đồ thị dependency, tối đa `parallel` module cùng lúc
 async function runBatch(names, opts) {
   const parallel = Math.max(1, Number(opts.parallel) || 1);
-  const selected = names.filter((n) => state.modules[n]);
+  const selected = names.filter((n) => state.modules[n] && !names.includes(state.modules[n].parent));
   const deps = Object.fromEntries(selected.map((n) => [n, state.modules[n].deps.filter((d) => selected.includes(d))]));
   selected.forEach((n) => setStatus(n, 'queued', { duration: null }));
   broadcast({ type: 'batch', running: true });
@@ -510,7 +768,7 @@ function overview() {
     root: state.root,
     recentRoots: state.saved.recentRoots.filter((r) => fs.existsSync(r)),
     running: state.running,
-    modules: Object.values(state.modules),
+    modules: Object.values(state.modules).map((m) => ({ ...m, app: appInfo(m.name), runCmd: runCmdOf(m) })),
     jdks: state.jdks,
     presets: state.root ? rootData().presets : {},
     options: state.saved.options,
@@ -590,6 +848,59 @@ const routes = {
     sendJson(res, { ok: killModule(data.module) });
   },
 
+  'POST /api/term/open': async (req, res) => {
+    const data = await readBody(req);
+    const id = data.module && state.modules[data.module] ? data.module : ROOT_TERM;
+    const term = openTerm(id, data.rows, data.cols);
+    sendJson(res, { id, cwd: term.cwd, buffer: term.buffer, end: term.end });
+  },
+
+  'POST /api/term/input': async (req, res) => {
+    const data = await readBody(req);
+    const term = state.terms[data.id];
+    if (term && typeof data.data === 'string') term.child.stdin.write(data.data);
+    sendJson(res, { ok: !!term });
+  },
+
+  'POST /api/term/resize': async (req, res) => {
+    const data = await readBody(req);
+    const term = state.terms[data.id];
+    const rows = Number(data.rows) | 0;
+    const cols = Number(data.cols) | 0;
+    if (term && rows > 0 && cols > 0) term.child.stdio[3].write(`${rows} ${cols}\n`);
+    sendJson(res, { ok: !!term });
+  },
+
+  'POST /api/term/close': async (req, res) => {
+    const data = await readBody(req);
+    closeTerm(data.id);
+    sendJson(res, { ok: true });
+  },
+
+  'POST /api/app/start': async (req, res) => {
+    const data = await readBody(req);
+    const mod = state.modules[data.module];
+    if (!mod) return sendJson(res, { error: 'Không có module' }, 404);
+    if (!mod.canRun) return sendJson(res, { error: 'Submodule là thư viện, không chạy app được' }, 400);
+    if (appRunning(mod.name)) return sendJson(res, { error: 'App đang chạy' }, 409);
+    if (family(mod.name).some((n) => state.busy.has(n) || ['running', 'queued'].includes(state.modules[n].status))) {
+      return sendJson(res, { error: 'Project đang build/chạy lệnh' }, 409);
+    }
+    if (typeof data.cmd === 'string' && data.cmd.trim()) {
+      const runCmds = (rootData().runCmds ||= {});
+      if (data.cmd.trim() === defaultRunCmd(mod)) delete runCmds[mod.name];
+      else runCmds[mod.name] = data.cmd.trim();
+      save();
+    }
+    startApp(mod.name, runCmdOf(mod));
+    sendJson(res, { ok: true, runCmd: runCmdOf(mod) });
+  },
+
+  'POST /api/app/stop': async (req, res) => {
+    const data = await readBody(req);
+    sendJson(res, { ok: stopApp(data.module) });
+  },
+
   'POST /api/log/clear': async (req, res) => {
     const data = await readBody(req);
     const names = data.all ? Object.keys(state.logs) : [data.module];
@@ -621,6 +932,8 @@ const routes = {
     if (state.running) return sendJson(res, { error: 'Đang có batch chạy' }, 409);
     const busy = (data.modules || []).filter((n) => state.busy.has(n));
     if (busy.length) return sendJson(res, { error: `Đang chạy lệnh ở: ${busy.join(', ')}` }, 409);
+    const withApp = [...new Set((data.modules || []).flatMap(family))].filter(appRunning);
+    if (withApp.length) return sendJson(res, { error: `Dừng app trước khi build: ${withApp.join(', ')}` }, 409);
     state.running = true;
     state.cancelRequested = false;
     state.saved.options = data.options || {};
@@ -721,6 +1034,8 @@ function watchUi() {
 
 const shutdown = () => {
   cancelAll();
+  Object.keys(state.apps).forEach(stopApp);
+  Object.keys(state.terms).forEach(closeTerm);
   process.exit(0);
 };
 process.on('SIGINT', shutdown);

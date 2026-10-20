@@ -109,6 +109,28 @@
   .dir .when { color: var(--muted); font-size: 11px; }
   .warnbox { color: var(--warn); font-size: 12px; }
 
+  /* ---- cây module ---- */
+  tr.child td { background: rgba(255,255,255,.012); }
+  tr.child .name { font-weight: 500; }
+  .tw { background: none; border: none; padding: 0 4px 0 0; color: var(--muted); cursor: pointer; font-size: 11px; width: 16px; }
+  .tw-sp { display: inline-block; width: 16px; color: var(--muted); }
+  tr.child .namecell { padding-left: 26px; }
+  .tag.sub { color: #c297ff; border-color: #5b3f8a; }
+  .appline { margin-top: 3px; }
+  .appline a { color: var(--accent); }
+
+  /* ---- tab Log / App / Terminal ---- */
+  .tabs { display: flex; gap: 2px; }
+  .tabs button { border-radius: 6px 6px 0 0; border-bottom: none; padding: 4px 10px; font-size: 12px; color: var(--muted); }
+  .tabs button.on { background: var(--bg); color: var(--text); border-color: var(--accent); }
+  .appbar, .termbar { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  .appbar input { flex: 1; font-family: var(--mono); font-size: 12px; }
+  .termbar .p { flex: 1; font-family: var(--mono); font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #termWrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: #0b0d11; }
+  #termWrap[hidden] { display: none; }
+  #term { flex: 1; min-height: 0; padding: 6px 0 0 8px; }
+  [hidden] { display: none !important; }
+
   /* ---- ô lệnh ---- */
   .cmdbar { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-top: 1px solid var(--border); background: #0b0d11; font-family: var(--mono); }
   .cmdbar .prompt { color: var(--accent); white-space: nowrap; font-size: 12px; max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
@@ -218,13 +240,33 @@
   <section class="logpane">
     <div class="loghead">
       <span class="title" id="logTitle">Log</span>
-      <input type="text" id="logFilter" placeholder="Lọc log…">
-      <label class="chk"><input type="checkbox" id="errOnly"> Chỉ lỗi</label>
-      <label class="chk"><input type="checkbox" id="follow" checked> Auto-scroll</label>
-      <button class="sm" id="clearLog" title="Xoá log của module đang xem (Shift+click: xoá log tất cả module)">🗑 Clear</button>
+      <div class="tabs">
+        <button data-view="log" class="on" title="Log build / lệnh">Build</button>
+        <button data-view="app" title="Log app đang chạy">App</button>
+        <button data-view="term" title="Terminal tương tác">Terminal</button>
+      </div>
+      <span id="logTools" style="display:contents">
+        <input type="text" id="logFilter" placeholder="Lọc log…">
+        <label class="chk"><input type="checkbox" id="errOnly"> Chỉ lỗi</label>
+        <label class="chk"><input type="checkbox" id="follow" checked> Auto-scroll</label>
+        <button class="sm" id="clearLog" title="Xoá log của module đang xem (Shift+click: xoá log tất cả module)">🗑 Clear</button>
+      </span>
+    </div>
+    <div class="appbar" id="appbar" hidden>
+      <span class="muted">Lệnh run</span>
+      <input type="text" id="runCmd" spellcheck="false" autocomplete="off" title="Chạy từ thư mục project cha. Sửa rồi bấm Run để lưu cho module này">
+      <button class="primary sm" id="appStart">▶ Run</button>
+      <button class="danger sm" id="appStop">■ Stop</button>
+      <span id="appState"></span>
+    </div>
+    <div class="termbar" id="termbar" hidden>
+      <span class="p" id="termCwd"></span>
+      <button class="sm" id="termRestart" title="Đóng và mở terminal mới">↻ Mở lại</button>
+      <button class="sm" id="termClose" title="Đóng terminal (kill shell)">✕ Đóng</button>
     </div>
     <pre id="log"><div class="empty">Chọn một module để xem log</div></pre>
-    <div class="cmdbar">
+    <div id="termWrap" hidden><div id="term"></div></div>
+    <div class="cmdbar" id="cmdbar">
       <span class="prompt" id="cmdPrompt">$</span>
       <input type="text" id="cmd" placeholder="Chọn module để chạy lệnh…" disabled autocomplete="off" spellcheck="false">
       <button class="sm danger" id="cmdKill" title="Dừng lệnh đang chạy" hidden>■ Dừng</button>
@@ -235,7 +277,12 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-const S = { modules: {}, order: [], selected: new Set(), active: null, logs: {}, running: false, presets: {} };
+const S = { modules: {}, order: [], selected: new Set(), active: null, logs: {}, running: false, presets: {},
+            view: 'log', collapsed: new Set() };
+const COLLAPSE_KEY = 'mvn-dashboard-collapsed';
+const VIEW_KEY = 'mvn-dashboard-view';
+// Log build dùng key = tên module, log app dùng key = "<module>#app"
+const logKey = () => (S.active ? (S.view === 'app' ? `${S.active}#app` : S.active) : null);
 const LS_KEY = 'mvn-dashboard-selected';
 const ACTIVE_KEY = 'mvn-dashboard-active';
 
@@ -291,6 +338,7 @@ function applyData(data) {
   if (rootChanged) {
     S.selected = new Set();
     try { JSON.parse(localStorage.getItem(lsKey()) || '[]').forEach((n) => S.modules[n] && S.selected.add(n)); } catch {}
+    try { S.collapsed = new Set(JSON.parse(localStorage.getItem(`${COLLAPSE_KEY}:${S.root}`) || '[]')); } catch {}
     S.active = null;
     S.logs = {};
     renderLog();
@@ -380,7 +428,23 @@ function options() {
 
 // ------------------------------------------------------------ rendering ----
 
+const APP_LABEL = { starting: 'App đang khởi động', up: 'App đang chạy', stopping: 'App đang dừng', crashed: 'App lỗi' };
+const APP_CLASS = { starting: 's-queued', up: 's-success', stopping: 's-queued', crashed: 's-failed' };
+
+function appBadge(m) {
+  const a = m.app;
+  if (!a || a.status === 'stopped') return '';
+  const port = a.port ? ` <a href="http://localhost:${a.port}" target="_blank" title="Mở app">:${a.port}</a>` : '';
+  return `<div class="appline"><span class="badge ${APP_CLASS[a.status] || ''}"><span class="dot"></span>${APP_LABEL[a.status] || a.status}${port}</span></div>`;
+}
+
+const appActive = (m) => ['starting', 'up', 'stopping'].includes(m?.app?.status);
+
 function statusCell(m) {
+  return buildBadge(m) + appBadge(m);
+}
+
+function buildBadge(m) {
   if (m.busy) return '<span class="badge s-running"><span class="dot"></span>Đang chạy lệnh</span>';
   const extra = m.status === 'running' && m.startedAt
     ? ` <span class="muted" data-tick="${m.startedAt}">${fmtDur(Math.round((Date.now() - m.startedAt) / 1000))}</span>`
@@ -395,6 +459,8 @@ function lastCell(m) {
 }
 
 function gitCell(g, name) {
+  const m = S.modules[name];
+  if (m?.parent && !m.isSubmodule) return '<span class="muted" title="Dùng chung git với project cha">↑ git của cha</span>';
   if (!g) return '<span class="muted">—</span>';
   let s = `<button class="tag" data-branch="${esc(name)}" title="Đổi branch / fetch / pull">⎇ ${esc(g.branch)} ▾</button>`;
   if (g.dirty) s += `<span class="tag dirty" title="file thay đổi chưa commit">●${g.dirty}</span>`;
@@ -404,16 +470,29 @@ function gitCell(g, name) {
 }
 
 function rowHtml(m) {
-  const deps = m.deps.map((d) => `<span class="tag dep" title="phụ thuộc">→ ${esc(d)}</span>`).join('');
+  const deps = m.deps.map((d) => `<span class="tag dep" title="phụ thuộc">→ ${esc(d.split('/').pop())}</span>`).join('');
+  const kids = m.children?.length || 0;
+  const toggle = kids
+    ? `<button class="tw" data-toggle="${esc(m.name)}" title="Thu gọn / mở rộng">${S.collapsed.has(m.name) ? '▸' : '▾'}</button>`
+    : `<span class="tw-sp">${m.parent ? '↳' : ''}</span>`;
+  const kind = m.parent
+    ? (m.isSubmodule ? '<span class="tag sub" title="git submodule: branch độc lập">submodule</span>' : '<span class="tag">module</span>')
+    : (kids ? `<span class="tag" title="Build project = build cả ${kids} module con">${kids} module</span>` : '');
+  const wrapperTag = m.parent || m.hasWrapper ? '' : '<span class="tag" title="Không có mvnw, sẽ dùng mvn">no mvnw</span>';
+  const app = appActive(m)
+    ? `<button class="sm danger" data-appstop="${esc(m.name)}" title="Dừng app">■</button>`
+    : `<button class="sm" data-appstart="${esc(m.name)}" title="Chạy app: ${esc(m.runCmd)}" ${m.canRun ? '' : 'disabled'}>▶</button>`;
   return `
     <td><input type="checkbox" data-sel="${esc(m.name)}" ${S.selected.has(m.name) ? 'checked' : ''}></td>
-    <td><div class="name">${esc(m.name)} ${m.hasWrapper ? '' : '<span class="tag" title="Không có mvnw, sẽ dùng mvn">no mvnw</span>'}</div>
+    <td class="namecell"><div class="name">${toggle}${esc(m.parent ? m.rel : m.name)} ${kind}${wrapperTag}</div>
         <div class="sub">${esc(m.artifactId)}:${esc(m.version || '?')} ${m.javaVersion ? `<span class="tag">☕ ${esc(m.javaVersion)}</span>` : ''}${deps}</div></td>
     <td data-git>${gitCell(m.git, m.name)}</td>
     <td data-status>${statusCell(m)}</td>
     <td data-last>${lastCell(m)}</td>
     <td class="actions">
-      <button class="sm" data-build="${esc(m.name)}" title="Build riêng module này" ${S.running ? 'disabled' : ''}>▶</button>
+      <button class="sm" data-build="${esc(m.name)}" title="Build riêng ${m.parent ? 'module này (-pl ' + esc(m.rel) + ')' : 'project này'}" ${S.running ? 'disabled' : ''}>🔨</button>
+      ${app}
+      <button class="sm" data-term="${esc(m.name)}" title="Mở terminal tại thư mục này">⌨</button>
       <button class="sm" data-open="${esc(m.name)}" title="Mở trong Finder">📁</button>
       <button class="sm" data-idea="${esc(m.name)}" title="Mở bằng IntelliJ IDEA">IJ</button>
     </td>`;
@@ -424,8 +503,10 @@ function renderRows() {
     $('rows').innerHTML = `<tr><td colspan="6" class="empty">${S.root ? 'Không có thư mục con nào chứa pom.xml' : 'Chưa chọn folder'}</td></tr>`;
     return updateSelection();
   }
-  $('rows').innerHTML = S.order.map((n) =>
-    `<tr class="row ${S.active === n ? 'active' : ''}" data-row="${esc(n)}">${rowHtml(S.modules[n])}</tr>`).join('');
+  $('rows').innerHTML = S.order
+    .filter((n) => !S.collapsed.has(S.modules[n].parent))
+    .map((n) => `<tr class="row ${S.modules[n].parent ? 'child' : ''} ${S.active === n ? 'active' : ''}" data-row="${esc(n)}">${rowHtml(S.modules[n])}</tr>`)
+    .join('');
   updateSelection();
 }
 
@@ -435,6 +516,7 @@ function updateRow(name) {
   tr.querySelector('[data-status]').innerHTML = statusCell(S.modules[name]);
   tr.querySelector('[data-git]').innerHTML = gitCell(S.modules[name].git, name);
   tr.querySelector('[data-last]').innerHTML = lastCell(S.modules[name]);
+  tr.innerHTML = rowHtml(S.modules[name]);
 }
 
 function updateSelection() {
@@ -488,9 +570,9 @@ function lineNode(line) {
 function renderLog() {
   const pre = $('log');
   if (!S.active) { pre.innerHTML = '<div class="empty">Chọn một module để xem log</div>'; return; }
-  const lines = (S.logs[S.active] || []).filter(lineVisible);
+  const lines = (S.logs[logKey()] || []).filter(lineVisible);
   pre.textContent = '';
-  if (!lines.length) { pre.innerHTML = '<div class="empty">Chưa có log</div>'; return; }
+  if (!lines.length) { pre.innerHTML = `<div class="empty">${S.view === 'app' ? 'App chưa chạy. Bấm ▶ Run để chạy.' : 'Chưa có log'}</div>`; return; }
   const frag = document.createDocumentFragment();
   lines.forEach((l) => frag.appendChild(lineNode(l)));
   pre.appendChild(frag);
@@ -518,12 +600,141 @@ async function selectModule(name) {
   S.active = name;
   try { sessionStorage.setItem(ACTIVE_KEY, name); } catch {}
   document.querySelectorAll('tr.row').forEach((tr) => tr.classList.toggle('active', tr.dataset.row === name));
-  $('logTitle').textContent = `Log · ${name}`;
+  $('logTitle').textContent = name;
   updateCmdBar();
-  const data = await api(`/api/log?module=${encodeURIComponent(name)}`);
-  S.logs[name] = data.lines;
+  updateAppBar();
+  if (S.view === 'term') return showTerminal(name);
+  await reloadLog();
+}
+
+async function reloadLog() {
+  const key = logKey();
+  if (!key) return renderLog();
+  const data = await api(`/api/log?module=${encodeURIComponent(key)}`);
+  S.logs[key] = data.lines;
   pendingLines = [];
   renderLog();
+}
+
+// ------------------------------------------------------------ tab view ----
+
+function setView(v) {
+  S.view = v;
+  try { sessionStorage.setItem(VIEW_KEY, v); } catch {}
+  document.querySelectorAll('[data-view]').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
+  const term = v === 'term';
+  $('log').hidden = term;
+  $('logTools').hidden = term;
+  $('termWrap').hidden = !term;
+  $('termbar').hidden = !term;
+  $('appbar').hidden = v !== 'app';
+  $('cmdbar').hidden = v !== 'log';
+  updateAppBar();
+  if (term) showTerminal(S.active);
+  else reloadLog();
+}
+
+// ------------------------------------------------------------------ app ----
+
+function updateAppBar() {
+  const m = S.modules[S.active];
+  const on = appActive(m);
+  if (document.activeElement !== $('runCmd')) $('runCmd').value = m?.runCmd || '';
+  $('runCmd').disabled = !m || !m.canRun || on;
+  $('appStart').disabled = !m || !m.canRun || on;
+  $('appStop').disabled = !on;
+  $('appState').innerHTML = !m ? '' : !m.canRun ? '<span class="muted">Submodule là thư viện, không chạy app</span>' : appBadge(m);
+}
+
+async function startApp(name, cmd) {
+  const r = await api('/api/app/start', { module: name, cmd });
+  if (r.error) return alert(r.error);
+  S.modules[name].runCmd = r.runCmd;
+  if (S.active !== name) await selectModule(name);
+  if (S.view !== 'app') setView('app');
+}
+
+// ------------------------------------------------------------- terminal ----
+
+const T = { term: null, fit: null, id: null, end: 0, pending: '', flushing: false };
+let xtermReady = null;
+
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    const el = document.createElement('script');
+    el.src = src; el.onload = res; el.onerror = () => rej(new Error(src));
+    document.head.appendChild(el);
+  });
+}
+
+// xterm.js tải từ CDN khi mở tab Terminal lần đầu (các tính năng khác vẫn chạy offline)
+function loadXterm() {
+  if (!xtermReady) {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = 'https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css';
+    document.head.appendChild(css);
+    xtermReady = loadScript('https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js')
+      .then(() => loadScript('https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js'))
+      .catch((e) => { xtermReady = null; throw e; });
+  }
+  return xtermReady;
+}
+
+async function showTerminal(name) {
+  try {
+    await loadXterm();
+  } catch {
+    $('term').innerHTML = '<div class="empty">Không tải được xterm.js (cần Internet lần đầu). Dùng ô lệnh ở tab Build thay thế.</div>';
+    return;
+  }
+  if (!T.term) {
+    $('term').innerHTML = '';
+    T.term = new Terminal({
+      fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace', fontSize: 12, cursorBlink: true, scrollback: 5000,
+      theme: { background: '#0b0d11', foreground: '#d7dce4', selectionBackground: '#2d4a7a' },
+    });
+    T.fit = new FitAddon.FitAddon();
+    T.term.loadAddon(T.fit);
+    T.term.open($('term'));
+    T.term.onData(sendTermInput);
+    T.term.onResize(({ rows, cols }) => T.id && api('/api/term/resize', { id: T.id, rows, cols }));
+    new ResizeObserver(() => { if (!$('termWrap').hidden) T.fit.fit(); }).observe($('termWrap'));
+  }
+  T.fit.fit();
+  const r = await api('/api/term/open', { module: name, rows: T.term.rows, cols: T.term.cols });
+  T.id = r.id;
+  T.end = r.end;
+  T.pending = '';
+  T.term.reset();
+  T.term.write(r.buffer);
+  $('termCwd').textContent = `⌨ ${r.cwd}`;
+  // Terminal có thể đã mở trước đó với kích thước khác
+  api('/api/term/resize', { id: T.id, rows: T.term.rows, cols: T.term.cols });
+  T.term.focus();
+}
+
+// Gom phím gõ và gửi tuần tự để giữ đúng thứ tự
+function sendTermInput(d) {
+  T.pending += d;
+  if (T.flushing || !T.id) return;
+  T.flushing = true;
+  setTimeout(async () => {
+    while (T.pending && T.id) {
+      const data = T.pending;
+      T.pending = '';
+      await api('/api/term/input', { id: T.id, data });
+    }
+    T.pending = '';
+    T.flushing = false;
+  }, 0);
+}
+
+function onTermData(e) {
+  if (!T.term || e.id !== T.id || e.end <= T.end) return;
+  const start = e.end - e.data.length;
+  T.term.write(start >= T.end ? e.data : e.data.slice(T.end - start));
+  T.end = e.end;
 }
 
 // --------------------------------------------------------------- events ----
@@ -542,12 +753,31 @@ function connect() {
       location.reload();
     } else if (e.type === 'log') {
       (S.logs[e.module] ||= []).push(e.line);
-      if (e.module === S.active) pendingLines.push(e.line);
+      if (e.module === logKey()) pendingLines.push(e.line);
+    } else if (e.type === 'term') {
+      onTermData(e);
+    } else if (e.type === 'termexit') {
+      if (T.term && e.id === T.id) {
+        T.term.write(`\r\n\x1b[90m[terminal đã đóng (exit ${e.code}), bấm ↻ Mở lại]\x1b[0m\r\n`);
+        T.id = null;
+      }
+    } else if (e.type === 'app') {
+      const m = S.modules[e.module];
+      if (!m) return;
+      m.app = e.app;
+      updateRow(e.module);
+      if (e.module === S.active) updateAppBar();
     } else if (e.type === 'status') {
       const m = S.modules[e.module];
       if (!m) return;
       Object.assign(m, { status: e.status, duration: e.duration, startedAt: e.startedAt });
-      if (e.status === 'running') { S.logs[e.module] = []; if (!S.active || S.modules[S.active]?.status !== 'running') selectModule(e.module); }
+      if (e.status === 'running') {
+        S.logs[e.module] = [];
+        if (!S.active || S.modules[S.active]?.status !== 'running') {
+          if (S.view === 'app') setView('log');
+          if (S.view === 'log') selectModule(e.module);
+        }
+      }
       if (['success', 'failed', 'cancelled'].includes(e.status)) m.last = { status: e.status, at: Date.now(), duration: e.duration, goals: options().goals };
       updateRow(e.module);
       updateSummary();
@@ -561,7 +791,7 @@ function connect() {
       if (e.module === brModule) e.running ? renderBranches() : loadBranches();
     } else if (e.type === 'logcleared') {
       e.modules.forEach((n) => (S.logs[n] = []));
-      if (e.modules.includes(S.active)) { pendingLines = []; renderLog(); }
+      if (e.modules.includes(logKey())) { pendingLines = []; renderLog(); }
     } else if (e.type === 'batch') {
       setRunning(e.running);
       if (!e.running) {
@@ -612,6 +842,15 @@ $('rows').addEventListener('click', (ev) => {
     return updateSelection();
   }
   if (t.dataset.build) return build([t.dataset.build]);
+  if (t.dataset.appstart) return startApp(t.dataset.appstart);
+  if (t.dataset.appstop) return api('/api/app/stop', { module: t.dataset.appstop });
+  if (t.dataset.term) { selectModule(t.dataset.term); return setView('term'); }
+  if (t.dataset.toggle) {
+    const n = t.dataset.toggle;
+    S.collapsed.has(n) ? S.collapsed.delete(n) : S.collapsed.add(n);
+    try { localStorage.setItem(`${COLLAPSE_KEY}:${S.root}`, JSON.stringify([...S.collapsed])); } catch {}
+    return renderRows();
+  }
   const br = t.closest('[data-branch]');
   if (br) return openBranches(br.dataset.branch);
   if (t.dataset.open) return api('/api/open', { module: t.dataset.open });
@@ -790,16 +1029,35 @@ $('cmd').addEventListener('keydown', async (ev) => {
 $('cmdKill').addEventListener('click', () => S.active && api('/api/kill', { module: S.active }));
 $('clearLog').addEventListener('click', (ev) => {
   if (ev.shiftKey) return api('/api/log/clear', { all: true });
-  if (S.active) api('/api/log/clear', { module: S.active });
+  if (S.active) api('/api/log/clear', { module: logKey() });
 });
 updateCmdBar();
+
+document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
+$('appStart').addEventListener('click', () => S.active && startApp(S.active, $('runCmd').value));
+$('runCmd').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') $('appStart').click(); });
+$('appStop').addEventListener('click', () => S.active && api('/api/app/stop', { module: S.active }));
+$('termClose').addEventListener('click', async () => {
+  if (T.id) await api('/api/term/close', { id: T.id });
+});
+$('termRestart').addEventListener('click', async () => {
+  if (T.id) await api('/api/term/close', { id: T.id });
+  T.id = null;
+  showTerminal(S.active);
+});
 
 // đồng hồ cho module đang chạy
 setInterval(() => {
   document.querySelectorAll('[data-tick]').forEach((el) => (el.textContent = fmtDur(Math.round((Date.now() - Number(el.dataset.tick)) / 1000))));
 }, 1000);
 
-load().then(connect);
+load().then(() => {
+  // Mở lại tab đang xem trước khi reload (sau khi đã có module đang chọn)
+  let v = null;
+  try { v = sessionStorage.getItem(VIEW_KEY); } catch {}
+  if (v && v !== 'log') setView(v);
+  connect();
+});
 </script>
 </body>
 </html>
