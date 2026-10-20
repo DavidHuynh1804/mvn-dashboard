@@ -237,6 +237,7 @@
 const $ = (id) => document.getElementById(id);
 const S = { modules: {}, order: [], selected: new Set(), active: null, logs: {}, running: false, presets: {} };
 const LS_KEY = 'mvn-dashboard-selected';
+const ACTIVE_KEY = 'mvn-dashboard-active';
 
 const STATUS_LABEL = { idle: 'Chưa build', queued: 'Đang chờ', running: 'Đang build', success: 'Thành công',
                        failed: 'Lỗi', cancelled: 'Đã huỷ', skipped: 'Bỏ qua' };
@@ -298,6 +299,12 @@ function applyData(data) {
   renderRows();
   renderPresets();
   if (!data.root) showPicker();
+  // Sau khi reload: mở lại module đang xem trước đó
+  if (rootChanged && !S.active) {
+    let last = null;
+    try { last = sessionStorage.getItem(ACTIVE_KEY); } catch {}
+    if (last && S.modules[last]) selectModule(last);
+  }
 }
 
 // ----------------------------------------------------------- folder pick ----
@@ -509,6 +516,7 @@ requestAnimationFrame(flushLog);
 
 async function selectModule(name) {
   S.active = name;
+  try { sessionStorage.setItem(ACTIVE_KEY, name); } catch {}
   document.querySelectorAll('tr.row').forEach((tr) => tr.classList.toggle('active', tr.dataset.row === name));
   $('logTitle').textContent = `Log · ${name}`;
   updateCmdBar();
@@ -524,7 +532,15 @@ function connect() {
   const es = new EventSource('/api/events');
   es.onmessage = (ev) => {
     const e = JSON.parse(ev.data);
-    if (e.type === 'log') {
+    if (e.type === 'hello') {
+      // Server khởi động lại (node --watch) -> tải lại trang để lấy code mới
+      if (S.boot && S.boot !== e.boot) return location.reload();
+      S.boot = e.boot;
+      if (e.dev) document.title = '[dev] Mvn Dashboard';
+      if (es.lostConnection) { es.lostConnection = false; $('summary').textContent = 'Đã kết nối lại'; }
+    } else if (e.type === 'reload') {
+      location.reload();
+    } else if (e.type === 'log') {
       (S.logs[e.module] ||= []).push(e.line);
       if (e.module === S.active) pendingLines.push(e.line);
     } else if (e.type === 'status') {
@@ -555,7 +571,7 @@ function connect() {
       }
     }
   };
-  es.onerror = () => { $('summary').textContent = 'Mất kết nối server… đang thử lại'; };
+  es.onerror = () => { es.lostConnection = true; $('summary').textContent = 'Mất kết nối server… đang thử lại'; };
 }
 
 function updateSummary(final) {

@@ -53,3 +53,14 @@ Tool scan mọi thư mục con có `pom.xml`. Nếu bản thân folder đã ch�
 Mọi thứ nằm trong `~/.mvn-dashboard/`:
 - `state.json`: folder gần đây, tuỳ chọn build, lịch sử build và preset theo từng folder
 - `logs/<folder>-<hash>/<module>.log`: log build gần nhất của từng module
+
+## Phát triển tool
+
+```bash
+npm run dev
+```
+
+- Sửa `index.html` thì trình duyệt tự tải lại ngay.
+- Sửa `server.js` thì `node --watch` tự khởi động lại server, trang tự tải lại khi kết nối lại.
+- Ở chế độ dev, server tự mở lại folder dùng gần nhất, và trang nhớ module đang xem. Trình duyệt chỉ mở ở lần chạy đầu.
+- Lưu ý: khởi động lại server sẽ dừng các build hoặc lệnh đang chạy.

@@ -23,8 +23,9 @@ const expandHome = (p) => p.replace(/^~(?=$|\/)/, os.homedir());
 // ---------------------------------------------------------------- args ----
 
 function parseArgs(argv) {
-  const args = { root: null, port: 8765, browser: true };
+  const args = { root: null, port: 8765, browser: true, dev: false };
   for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--dev') args.dev = true;
     if (argv[i] === '--root') args.root = path.resolve(expandHome(argv[++i]));
     else if (argv[i] === '--port') args.port = Number(argv[++i]);
     else if (argv[i] === '--no-browser') args.browser = false;
@@ -32,6 +33,7 @@ function parseArgs(argv) {
   return args;
 }
 const ARGS = parseArgs(process.argv.slice(2));
+const BOOT_ID = Date.now().toString(36);
 
 // --------------------------------------------------------------- state ----
 
@@ -603,7 +605,8 @@ const routes = {
 
   'GET /api/events': (req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
-    res.write(': hi\n\n');
+    // boot id: trình duyệt so sánh khi kết nối lại để biết server vừa khởi động lại
+    res.write(`data: ${JSON.stringify({ type: 'hello', boot: BOOT_ID, dev: ARGS.dev })}\n\n`);
     state.clients.add(res);
     const ping = setInterval(() => res.write(': ping\n\n'), 15000);
     req.on('close', () => {
@@ -678,22 +681,41 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// Dev: sửa index.html -> trình duyệt tự reload (server.js do `node --watch` lo khởi động lại)
+function watchUi() {
+  let timer;
+  fs.watch(path.join(HERE, 'index.html'), () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      console.log('[dev] index.html thay đổi -> reload trình duyệt');
+      broadcast({ type: 'reload' });
+    }, 100);
+  });
+}
+
 (async () => {
   state.jdks = await listJdks();
-  if (ARGS.root) {
+  // Dev: không truyền --root thì mở lại folder dùng gần nhất
+  const root = ARGS.root || (ARGS.dev && state.saved.recentRoots.find((r) => fs.existsSync(r)));
+  if (root) {
     try {
-      await setRoot(ARGS.root);
+      await setRoot(root);
     } catch (e) {
       console.error(e.message);
       process.exit(1);
     }
   }
+  if (ARGS.dev) watchUi();
   server.listen(ARGS.port, '127.0.0.1', () => {
     const url = `http://127.0.0.1:${ARGS.port}`;
-    console.log(`Mvn Dashboard: ${url}` + (state.root
+    console.log(`Mvn Dashboard${ARGS.dev ? ' [dev]' : ''}: ${url}` + (state.root
       ? `  (root: ${state.root}, ${Object.keys(state.modules).length} modules)`
       : '  (chọn folder trên giao diện)'));
-    if (ARGS.browser) spawn('open', [url], { detached: true, stdio: 'ignore' }).unref();
+    if (!ARGS.browser) return;
+    const openBrowser = () => spawn('open', [url], { detached: true, stdio: 'ignore' }).unref();
+    // Dev: tab cũ sẽ tự kết nối lại sau khi restart, chỉ mở tab mới nếu chưa có ai kết nối
+    if (ARGS.dev) setTimeout(() => state.clients.size || openBrowser(), 2500);
+    else openBrowser();
   });
 })();
 
