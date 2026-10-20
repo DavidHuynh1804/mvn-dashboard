@@ -41,6 +41,7 @@ const state = {
   logs: {},         // name -> string[]
   procs: {},        // name -> ChildProcess
   jdks: [],
+  busy: new Set(),   // module đang chạy lệnh git/exec
   clients: new Set(),
   running: false,
   cancelRequested: false,
@@ -197,6 +198,7 @@ async function scan() {
     m.startedAt = old.startedAt || null;
     m.duration = old.duration ?? null;
     m.last = history[n] || null;
+    m.busy = state.busy.has(n);
     ordered[n] = m;
   }
   state.modules = ordered;
@@ -242,6 +244,100 @@ function pickFolderNative() {
       resolve(err ? { cancelled: true } : { path: stdout.trim().replace(/\/$/, '') });
     });
   });
+}
+
+// ------------------------------------------------------- git & lệnh lẻ ----
+
+async function listBranches(dir) {
+  const [current, refs] = await Promise.all([
+    git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']),
+    git(dir, ['for-each-ref', '--sort=-committerdate', '--format=%(refname)|%(refname:short)|%(committerdate:relative)',
+      'refs/heads', 'refs/remotes']),
+  ]);
+  const local = [];
+  const remote = [];
+  for (const line of (refs || '').split('\n').filter(Boolean)) {
+    const [full, name, when] = line.split('|');
+    if (full.startsWith('refs/heads/')) local.push({ name, when });
+    else if (!full.endsWith('/HEAD') && name.includes('/')) remote.push({ name, when });
+  }
+  // Ẩn remote branch đã có bản local cùng tên
+  const localNames = new Set(local.map((b) => b.name));
+  return {
+    current: (current || '').trim(),
+    local,
+    remote: remote.filter((b) => !localNames.has(b.name.replace(/^[^/]+\//, ''))),
+  };
+}
+
+function gitCommand(action, branch, remote) {
+  switch (action) {
+    case 'fetch': return ['git', 'fetch', '--all', '--prune'];
+    case 'pull': return ['git', 'pull', '--ff-only'];
+    case 'submodules': return ['git', 'submodule', 'update', '--init', '--recursive'];
+    case 'checkout':
+      if (!branch || branch.startsWith('-')) return null;
+      // remote branch (origin/foo) -> tạo local branch tracking
+      return remote ? ['git', 'checkout', '--track', branch] : ['git', 'checkout', branch];
+    default: return null;
+  }
+}
+
+// Chạy một lệnh trong thư mục module, đẩy output vào log của module đó
+function runTask(name, cmd, { shell = false } = {}) {
+  return new Promise((resolve) => {
+    const mod = state.modules[name];
+    const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
+    const javaHome = resolveJavaHome(mod, {});
+    if (javaHome) {
+      env.JAVA_HOME = javaHome;
+      env.PATH = path.join(javaHome, 'bin') + path.delimiter + env.PATH;
+    }
+    const [bin, args] = shell ? [process.env.SHELL || '/bin/sh', ['-lc', cmd]] : [cmd[0], cmd.slice(1)];
+    appendLog(name, `$ ${shell ? cmd : cmd.join(' ')}`);
+    state.busy.add(name);
+    mod.busy = true;
+    broadcast({ type: 'task', module: name, running: true });
+    // stdin ignore: lệnh đòi nhập liệu sẽ nhận EOF thay vì treo
+    const child = spawn(bin, args, { cwd: mod.path, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    state.procs[name] = child;
+    let partial = '';
+    const onData = (chunk) => {
+      const lines = (partial + chunk.toString()).split(/\r?\n/);
+      partial = lines.pop();
+      for (const l of lines) appendLog(name, l);
+    };
+    child.stdout.on('data', onData);
+    child.stderr.on('data', onData);
+    let finished = false;
+    const finish = async (code, errMsg) => {
+      if (finished) return;
+      finished = true;
+      if (partial) appendLog(name, partial);
+      if (errMsg) appendLog(name, `[dashboard] Không chạy được lệnh: ${errMsg}`);
+      appendLog(name, `[dashboard] exit=${code}`);
+      delete state.procs[name];
+      state.busy.delete(name);
+      const cur = state.modules[name] || mod;  // có thể đã rescan trong lúc chạy
+      cur.busy = false;
+      cur.git = await gitInfo(mod.path);
+      broadcast({ type: 'task', module: name, running: false, code, git: cur.git });
+      resolve(code);
+    };
+    child.on('error', (e) => finish(-1, e.message));
+    child.on('close', (code) => finish(code ?? -1));
+  });
+}
+
+function killModule(name) {
+  const child = state.procs[name];
+  if (!child) return false;
+  try {
+    process.kill(-child.pid, 'SIGTERM');
+  } catch {
+    /* đã thoát */
+  }
+  return true;
 }
 
 // --------------------------------------------------------------- builds ----
@@ -460,6 +556,46 @@ const routes = {
     sendJson(res, await pickFolderNative());
   },
 
+  'GET /api/branches': async (req, res, url) => {
+    const mod = state.modules[url.searchParams.get('module')];
+    if (!mod) return sendJson(res, { error: 'Không có module' }, 404);
+    sendJson(res, await listBranches(mod.path));
+  },
+
+  'POST /api/git': async (req, res) => {
+    const data = await readBody(req);
+    const mod = state.modules[data.module];
+    if (!mod) return sendJson(res, { error: 'Không có module' }, 404);
+    if (state.busy.has(mod.name) || ['running', 'queued'].includes(mod.status)) return sendJson(res, { error: 'Module đang bận' }, 409);
+    const cmd = gitCommand(data.action, data.branch, data.remote);
+    if (!cmd) return sendJson(res, { error: 'Lệnh git không hợp lệ' }, 400);
+    const code = await runTask(mod.name, cmd);
+    sendJson(res, { ok: code === 0, code, git: state.modules[mod.name]?.git });
+  },
+
+  'POST /api/exec': async (req, res) => {
+    const data = await readBody(req);
+    const mod = state.modules[data.module];
+    if (!mod) return sendJson(res, { error: 'Không có module' }, 404);
+    if (!data.cmd || !String(data.cmd).trim()) return sendJson(res, { error: 'Lệnh trống' }, 400);
+    if (state.busy.has(mod.name) || ['running', 'queued'].includes(mod.status)) return sendJson(res, { error: 'Module đang bận' }, 409);
+    runTask(mod.name, String(data.cmd), { shell: true });
+    sendJson(res, { ok: true });
+  },
+
+  'POST /api/kill': async (req, res) => {
+    const data = await readBody(req);
+    sendJson(res, { ok: killModule(data.module) });
+  },
+
+  'POST /api/log/clear': async (req, res) => {
+    const data = await readBody(req);
+    const names = data.all ? Object.keys(state.logs) : [data.module];
+    for (const n of names) state.logs[n] = [];
+    broadcast({ type: 'logcleared', modules: names });
+    sendJson(res, { ok: true });
+  },
+
   'GET /api/log': (req, res, url) => {
     const name = url.searchParams.get('module');
     sendJson(res, { module: name, lines: state.logs[name] || [] });
@@ -480,6 +616,8 @@ const routes = {
     const data = await readBody(req);
     if (!state.root) return sendJson(res, { error: 'Chưa chọn folder' }, 400);
     if (state.running) return sendJson(res, { error: 'Đang có batch chạy' }, 409);
+    const busy = (data.modules || []).filter((n) => state.busy.has(n));
+    if (busy.length) return sendJson(res, { error: `Đang chạy lệnh ở: ${busy.join(', ')}` }, 409);
     state.running = true;
     state.cancelRequested = false;
     state.saved.options = data.options || {};
@@ -515,7 +653,20 @@ const routes = {
   },
 };
 
+// Server có thể chạy lệnh tuỳ ý nên chỉ nhận request từ chính trang này:
+// - Host phải là localhost (chống DNS rebinding)
+// - POST phải là JSON (buộc trình duyệt preflight CORS) và Origin (nếu có) phải khớp
+function isAllowed(req) {
+  const hosts = [`127.0.0.1:${ARGS.port}`, `localhost:${ARGS.port}`];
+  if (!hosts.includes(req.headers.host)) return false;
+  const origin = req.headers.origin;
+  if (origin && !hosts.some((h) => origin === `http://${h}`)) return false;
+  if (req.method === 'POST' && !String(req.headers['content-type'] || '').includes('application/json')) return false;
+  return true;
+}
+
 const server = http.createServer(async (req, res) => {
+  if (!isAllowed(req)) return sendJson(res, { error: 'forbidden' }, 403);
   const url = new URL(req.url, 'http://localhost');
   const handler = routes[`${req.method} ${url.pathname === '/index.html' ? '/' : url.pathname}`];
   if (!handler) return sendJson(res, { error: 'not found' }, 404);

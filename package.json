@@ -1,6 +1,6 @@
 {
   "name": "mvn-dashboard",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "GUI nhỏ để quản lý & build nhiều project Maven độc lập",
   "bin": {
     "mvn-dashboard": "server.js"

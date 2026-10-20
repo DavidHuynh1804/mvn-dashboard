@@ -77,8 +77,8 @@
   .summary { padding: 6px 12px; border-top: 1px solid var(--border); background: var(--panel); color: var(--muted); font-size: 12px; }
 
   /* ---- chọn folder ---- */
-  #picker { position: fixed; inset: 0; background: rgba(5, 7, 10, .82); display: flex; align-items: center; justify-content: center; z-index: 10; padding: 16px; }
-  #picker[hidden] { display: none; }
+  .overlay { position: fixed; inset: 0; background: rgba(5, 7, 10, .82); display: flex; align-items: center; justify-content: center; z-index: 10; padding: 16px; }
+  .overlay[hidden] { display: none; }
   .pick-card { width: min(720px, 100%); max-height: calc(100vh - 32px); display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
   .pick-card h2 { margin: 0; font-size: 15px; padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
   .pick-card h2 span { flex: 1; }
@@ -99,6 +99,20 @@
   .pick-foot { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border); }
   .pick-foot .info { flex: 1; color: var(--muted); font-size: 12px; }
   .err { color: var(--err); font-size: 12px; }
+
+  /* ---- branch ---- */
+  button.tag { cursor: pointer; background: transparent; font: inherit; font-size: 11px; }
+  button.tag:hover { border-color: var(--accent); color: var(--text); }
+  #branchModal .dirs { max-height: 380px; }
+  .br-sec { padding: 5px 10px; font-size: 11px; color: var(--muted); background: var(--panel2); border-bottom: 1px solid var(--border); position: sticky; top: 0; }
+  .dir.current { color: var(--ok); cursor: default; }
+  .dir .when { color: var(--muted); font-size: 11px; }
+  .warnbox { color: var(--warn); font-size: 12px; }
+
+  /* ---- ô lệnh ---- */
+  .cmdbar { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-top: 1px solid var(--border); background: #0b0d11; font-family: var(--mono); }
+  .cmdbar .prompt { color: var(--accent); white-space: nowrap; font-size: 12px; max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
+  .cmdbar input { flex: 1; background: transparent; border: none; outline: none; font-family: var(--mono); font-size: 12px; padding: 4px 0; }
 </style>
 </head>
 <body>
@@ -109,7 +123,24 @@
   <button id="rescan" title="Quét lại module & trạng thái git">↻ Rescan</button>
 </header>
 
-<div id="picker" hidden>
+<div id="branchModal" class="overlay" hidden>
+  <div class="pick-card">
+    <h2><span id="brTitle">⎇ Branch</span><button class="sm" id="brClose">✕</button></h2>
+    <div class="pick-body">
+      <div class="pick-row">
+        <input type="text" id="brSearch" placeholder="Tìm branch…" autocomplete="off">
+        <button id="brFetch" title="git fetch --all --prune">⟳ Fetch</button>
+        <button id="brPull" title="git pull --ff-only">↓ Pull</button>
+        <button id="brSub" title="git submodule update --init --recursive">Submodule</button>
+      </div>
+      <div class="warnbox" id="brWarn"></div>
+      <div class="browser"><div class="dirs" id="brList"></div></div>
+    </div>
+    <div class="pick-foot"><span class="info" id="brInfo">Bấm vào branch để checkout. Output hiện ở khung log.</span></div>
+  </div>
+</div>
+
+<div id="picker" class="overlay" hidden>
   <div class="pick-card">
     <h2><span>📂 Chọn thư mục chứa các project Maven</span><button class="sm" id="pickClose" hidden>✕</button></h2>
     <div class="pick-body">
@@ -190,8 +221,14 @@
       <input type="text" id="logFilter" placeholder="Lọc log…">
       <label class="chk"><input type="checkbox" id="errOnly"> Chỉ lỗi</label>
       <label class="chk"><input type="checkbox" id="follow" checked> Auto-scroll</label>
+      <button class="sm" id="clearLog" title="Xoá log của module đang xem (Shift+click: xoá log tất cả module)">🗑 Clear</button>
     </div>
     <pre id="log"><div class="empty">Chọn một module để xem log</div></pre>
+    <div class="cmdbar">
+      <span class="prompt" id="cmdPrompt">$</span>
+      <input type="text" id="cmd" placeholder="Chọn module để chạy lệnh…" disabled autocomplete="off" spellcheck="false">
+      <button class="sm danger" id="cmdKill" title="Dừng lệnh đang chạy" hidden>■ Dừng</button>
+    </div>
     <div class="summary" id="summary">Sẵn sàng</div>
   </section>
 </main>
@@ -337,6 +374,7 @@ function options() {
 // ------------------------------------------------------------ rendering ----
 
 function statusCell(m) {
+  if (m.busy) return '<span class="badge s-running"><span class="dot"></span>Đang chạy lệnh</span>';
   const extra = m.status === 'running' && m.startedAt
     ? ` <span class="muted" data-tick="${m.startedAt}">${fmtDur(Math.round((Date.now() - m.startedAt) / 1000))}</span>`
     : m.duration != null ? ` <span class="muted">${fmtDur(m.duration)}</span>` : '';
@@ -349,9 +387,9 @@ function lastCell(m) {
   return `<span title="${esc(m.last.goals)}">${icon} <span class="muted">${fmtAgo(m.last.at)} · ${fmtDur(m.last.duration)}</span></span>`;
 }
 
-function gitCell(g) {
+function gitCell(g, name) {
   if (!g) return '<span class="muted">—</span>';
-  let s = `<span class="tag" title="branch">⎇ ${esc(g.branch)}</span>`;
+  let s = `<button class="tag" data-branch="${esc(name)}" title="Đổi branch / fetch / pull">⎇ ${esc(g.branch)} ▾</button>`;
   if (g.dirty) s += `<span class="tag dirty" title="file thay đổi chưa commit">●${g.dirty}</span>`;
   if (g.ahead) s += `<span class="tag" title="commit chưa push">↑${g.ahead}</span>`;
   if (g.behind) s += `<span class="tag" title="commit chưa pull">↓${g.behind}</span>`;
@@ -364,7 +402,7 @@ function rowHtml(m) {
     <td><input type="checkbox" data-sel="${esc(m.name)}" ${S.selected.has(m.name) ? 'checked' : ''}></td>
     <td><div class="name">${esc(m.name)} ${m.hasWrapper ? '' : '<span class="tag" title="Không có mvnw, sẽ dùng mvn">no mvnw</span>'}</div>
         <div class="sub">${esc(m.artifactId)}:${esc(m.version || '?')} ${m.javaVersion ? `<span class="tag">☕ ${esc(m.javaVersion)}</span>` : ''}${deps}</div></td>
-    <td>${gitCell(m.git)}</td>
+    <td data-git>${gitCell(m.git, m.name)}</td>
     <td data-status>${statusCell(m)}</td>
     <td data-last>${lastCell(m)}</td>
     <td class="actions">
@@ -388,6 +426,7 @@ function updateRow(name) {
   const tr = document.querySelector(`tr[data-row="${CSS.escape(name)}"]`);
   if (!tr) return;
   tr.querySelector('[data-status]').innerHTML = statusCell(S.modules[name]);
+  tr.querySelector('[data-git]').innerHTML = gitCell(S.modules[name].git, name);
   tr.querySelector('[data-last]').innerHTML = lastCell(S.modules[name]);
 }
 
@@ -472,6 +511,7 @@ async function selectModule(name) {
   S.active = name;
   document.querySelectorAll('tr.row').forEach((tr) => tr.classList.toggle('active', tr.dataset.row === name));
   $('logTitle').textContent = `Log · ${name}`;
+  updateCmdBar();
   const data = await api(`/api/log?module=${encodeURIComponent(name)}`);
   S.logs[name] = data.lines;
   pendingLines = [];
@@ -495,6 +535,17 @@ function connect() {
       if (['success', 'failed', 'cancelled'].includes(e.status)) m.last = { status: e.status, at: Date.now(), duration: e.duration, goals: options().goals };
       updateRow(e.module);
       updateSummary();
+    } else if (e.type === 'task') {
+      const m = S.modules[e.module];
+      if (!m) return;
+      m.busy = e.running;
+      if (e.git) m.git = e.git;
+      updateRow(e.module);
+      if (e.module === S.active) updateCmdBar();
+      if (e.module === brModule) e.running ? renderBranches() : loadBranches();
+    } else if (e.type === 'logcleared') {
+      e.modules.forEach((n) => (S.logs[n] = []));
+      if (e.modules.includes(S.active)) { pendingLines = []; renderLog(); }
     } else if (e.type === 'batch') {
       setRunning(e.running);
       if (!e.running) {
@@ -545,6 +596,8 @@ $('rows').addEventListener('click', (ev) => {
     return updateSelection();
   }
   if (t.dataset.build) return build([t.dataset.build]);
+  const br = t.closest('[data-branch]');
+  if (br) return openBranches(br.dataset.branch);
   if (t.dataset.open) return api('/api/open', { module: t.dataset.open });
   if (t.dataset.idea) return api('/api/open', { module: t.dataset.idea, app: 'IntelliJ IDEA' });
   const tr = t.closest('tr.row');
@@ -621,6 +674,109 @@ $('pickNative').addEventListener('click', async () => {
 });
 $('logFilter').addEventListener('input', renderLog);
 $('errOnly').addEventListener('change', renderLog);
+
+// ---------------------------------------------------------------- branch ----
+
+let brModule = null;
+let brData = null;
+
+async function openBranches(name) {
+  brModule = name;
+  $('brTitle').textContent = `⎇ Branch · ${name}`;
+  $('brSearch').value = '';
+  $('branchModal').hidden = false;
+  $('brSearch').focus();
+  if (S.active !== name) selectModule(name);
+  await loadBranches();
+}
+
+async function loadBranches() {
+  if (!brModule) return;
+  brData = await api(`/api/branches?module=${encodeURIComponent(brModule)}`);
+  renderBranches();
+}
+
+function renderBranches() {
+  const m = S.modules[brModule];
+  const busy = m?.busy || ['running', 'queued'].includes(m?.status);
+  ['brFetch', 'brPull', 'brSub'].forEach((id) => ($(id).disabled = busy));
+  $('brWarn').textContent = busy ? 'Module đang chạy lệnh/build, chờ xong rồi thao tác.'
+    : m?.git?.dirty ? `⚠ Có ${m.git.dirty} file chưa commit. Git sẽ từ chối checkout nếu thay đổi bị đè, khi đó hãy stash/commit trước (có thể gõ "git stash" ở ô lệnh).` : '';
+  if (!brData || brData.error) { $('brList').innerHTML = `<div class="empty">${esc(brData?.error || 'Đang tải…')}</div>`; return; }
+  const q = $('brSearch').value.trim().toLowerCase();
+  const item = (b, remote) => {
+    const cur = !remote && b.name === brData.current;
+    return `<div class="dir ${cur ? 'current' : ''}" ${cur || busy ? '' : `data-co="${esc(b.name)}" data-remote="${remote ? 1 : ''}"`}>
+      ${cur ? '●' : remote ? '☁' : '⎇'} <span class="n">${esc(b.name)}</span><span class="when">${esc(b.when)}</span></div>`;
+  };
+  const local = brData.local.filter((b) => b.name.toLowerCase().includes(q));
+  const remote = brData.remote.filter((b) => b.name.toLowerCase().includes(q));
+  $('brList').innerHTML =
+    (local.length ? `<div class="br-sec">Local (${local.length})</div>` + local.map((b) => item(b, false)).join('') : '')
+    + (remote.length ? `<div class="br-sec">Remote (${remote.length})</div>` + remote.map((b) => item(b, true)).join('') : '')
+    || '<div class="empty">Không có branch phù hợp</div>';
+}
+
+async function gitAction(action, extra = {}) {
+  const r = await api('/api/git', { module: brModule, action, ...extra });
+  if (r.error) alert(r.error);
+  else if (!r.ok) $('brWarn').textContent = `✖ Lệnh git lỗi (exit ${r.code}), xem chi tiết ở khung log.`;
+}
+
+$('brClose').addEventListener('click', () => { $('branchModal').hidden = true; brModule = null; });
+$('branchModal').addEventListener('keydown', (ev) => { if (ev.key === 'Escape') $('brClose').click(); });
+$('brSearch').addEventListener('input', renderBranches);
+$('brFetch').addEventListener('click', () => gitAction('fetch'));
+$('brPull').addEventListener('click', () => gitAction('pull'));
+$('brSub').addEventListener('click', () => gitAction('submodules'));
+$('brList').addEventListener('click', (ev) => {
+  const d = ev.target.closest('[data-co]');
+  if (!d) return;
+  gitAction('checkout', { branch: d.dataset.co, remote: !!d.dataset.remote });
+});
+
+// --------------------------------------------------------------- ô lệnh ----
+
+const HIST_KEY = 'mvn-dashboard-cmd-history';
+let cmdHist = [];
+try { cmdHist = JSON.parse(localStorage.getItem(HIST_KEY) || '[]'); } catch {}
+let histIdx = -1;
+
+function updateCmdBar() {
+  const m = S.modules[S.active];
+  $('cmdPrompt').textContent = m ? `${m.name} $` : '$';
+  $('cmd').disabled = !m;
+  $('cmd').placeholder = !m ? 'Chọn module để chạy lệnh…'
+    : m.busy ? 'Đang chạy…' : 'Gõ lệnh, chạy trong thư mục module (vd: git stash, git log -5 --oneline)';
+  $('cmdKill').hidden = !m?.busy;
+  $('clearLog').disabled = !m;
+}
+
+$('cmd').addEventListener('keydown', async (ev) => {
+  if (ev.key === 'ArrowUp' || ev.key === 'ArrowDown') {
+    if (!cmdHist.length) return;
+    ev.preventDefault();
+    histIdx = Math.max(-1, Math.min(cmdHist.length - 1, histIdx + (ev.key === 'ArrowUp' ? 1 : -1)));
+    $('cmd').value = histIdx < 0 ? '' : cmdHist[histIdx];
+    return;
+  }
+  if (ev.key !== 'Enter') return;
+  const cmd = $('cmd').value.trim();
+  if (!cmd || !S.active) return;
+  if (cmd === 'clear') { $('cmd').value = ''; return $('clearLog').click(); }
+  const r = await api('/api/exec', { module: S.active, cmd });
+  if (r.error) return alert(r.error);
+  cmdHist = [cmd, ...cmdHist.filter((c) => c !== cmd)].slice(0, 100);
+  try { localStorage.setItem(HIST_KEY, JSON.stringify(cmdHist)); } catch {}
+  histIdx = -1;
+  $('cmd').value = '';
+});
+$('cmdKill').addEventListener('click', () => S.active && api('/api/kill', { module: S.active }));
+$('clearLog').addEventListener('click', (ev) => {
+  if (ev.shiftKey) return api('/api/log/clear', { all: true });
+  if (S.active) api('/api/log/clear', { module: S.active });
+});
+updateCmdBar();
 
 // đồng hồ cho module đang chạy
 setInterval(() => {

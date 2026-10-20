@@ -43,7 +43,9 @@ Tool scan mọi thư mục con có `pom.xml`. Nếu bản thân folder đã ch�
 - Tự chọn JDK theo `java.version` trong pom (macOS, qua `java_home`), hoặc chọn tay.
 - Build song song (∥). Thứ tự build tự tuân theo dependency nội bộ (khớp theo artifactId). Nếu một module lỗi, các module phụ thuộc vào nó sẽ bị bỏ qua.
 - Dùng `./mvnw` nếu wrapper đầy đủ, ngược lại dùng `mvn`.
-- Log realtime, tô màu lỗi/cảnh báo, có ô lọc và chế độ "Chỉ lỗi".
+- **Đổi branch:** bấm vào tag branch của module (`⎇ main ▾`) để mở danh sách branch local và remote, có ô tìm kiếm, bấm để checkout (branch remote sẽ được tạo local tracking). Có nút Fetch, Pull (`--ff-only`) và cập nhật submodule.
+- **Ô lệnh** dưới khung log: gõ lệnh, lệnh chạy trong thư mục của module đang xem, với `JAVA_HOME` đúng phiên bản. Dùng ↑/↓ để xem lại lịch sử lệnh, nút ■ để dừng, gõ `clear` để xoá log. Ô này không dành cho lệnh tương tác (lệnh cần nhập liệu sẽ nhận EOF).
+- Log realtime, tô màu lỗi/cảnh báo, có ô lọc và chế độ "Chỉ lỗi". Nút 🗑 Clear xoá log của module đang xem; Shift+click để xoá log tất cả module.
 - Preset nhóm module (lưu riêng theo từng folder). Có nút dừng build, thông báo desktop khi build xong, mở module trong Finder hoặc IntelliJ.
 
 ## Dữ liệu
