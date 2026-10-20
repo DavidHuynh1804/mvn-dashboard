@@ -1,0 +1,633 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mvn Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #161a21; --panel2: #1c212a; --border: #2a303b;
+    --text: #d7dce4; --muted: #8a93a3; --accent: #4c8dff;
+    --ok: #3fb950; --err: #f85149; --warn: #d29922; --run: #58a6ff; --skip: #8b949e;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         display: grid; grid-template-rows: auto auto 1fr; }
+  button, input, select { font: inherit; color: inherit; }
+  button { background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.danger { border-color: var(--err); color: var(--err); }
+  button.sm { padding: 2px 7px; font-size: 12px; }
+  input[type=text], select { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; }
+  input[type=text]:focus, select:focus { outline: none; border-color: var(--accent); }
+  label.chk { display: inline-flex; gap: 5px; align-items: center; cursor: pointer; user-select: none; white-space: nowrap; }
+
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  header h1 { font-size: 15px; margin: 0; }
+  header .root { color: var(--muted); font-family: var(--mono); font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  .toolbar .group { display: flex; gap: 8px; align-items: center; }
+  .toolbar .sep { width: 1px; height: 22px; background: var(--border); }
+  #goalsCustom { width: 200px; }
+  #profiles { width: 110px; } #extra { width: 160px; }
+  #parallel { width: 52px; }
+
+  main { display: grid; grid-template-columns: minmax(520px, 1.1fr) 1fr; min-height: 0; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } }
+
+  .modules { overflow: auto; border-right: 1px solid var(--border); }
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); z-index: 2; }
+  .preset { display: inline-flex; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .preset button { border: none; border-radius: 0; padding: 2px 9px; font-size: 12px; }
+  .preset button + button { border-left: 1px solid var(--border); color: var(--muted); padding: 2px 6px; }
+  .muted { color: var(--muted); }
+
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--border); position: sticky; top: 39px; background: var(--bg); z-index: 1; }
+  td { padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tr.row { cursor: pointer; }
+  tr.row:hover td { background: var(--panel); }
+  tr.row.active td { background: var(--panel2); }
+  .name { font-weight: 600; }
+  .sub { color: var(--muted); font-family: var(--mono); font-size: 11px; }
+  .tag { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 9px; border: 1px solid var(--border); color: var(--muted); margin-right: 3px; white-space: nowrap; }
+  .tag.dirty { color: var(--warn); border-color: var(--warn); }
+  .tag.dep { color: var(--accent); border-color: #2d4a7a; }
+  .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; white-space: nowrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--skip); flex: none; }
+  .s-success .dot { background: var(--ok); } .s-failed .dot { background: var(--err); }
+  .s-running .dot { background: var(--run); animation: pulse 1s infinite; } .s-queued .dot { background: var(--warn); }
+  .s-cancelled .dot, .s-skipped .dot { background: var(--skip); }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .actions { white-space: nowrap; text-align: right; }
+
+  .logpane { display: flex; flex-direction: column; min-height: 0; }
+  .loghead { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  .loghead .title { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #logFilter { width: 160px; }
+  #log { flex: 1; overflow: auto; margin: 0; padding: 10px 12px; font: 12px/1.45 var(--mono); white-space: pre-wrap; word-break: break-all; background: #0b0d11; }
+  #log .e { color: var(--err); } #log .w { color: var(--warn); } #log .ok { color: var(--ok); font-weight: 600; }
+  #log .cmd { color: var(--accent); } #log .dash { color: var(--muted); font-style: italic; }
+  .empty { color: var(--muted); padding: 30px; text-align: center; }
+  .summary { padding: 6px 12px; border-top: 1px solid var(--border); background: var(--panel); color: var(--muted); font-size: 12px; }
+
+  /* ---- chọn folder ---- */
+  #picker { position: fixed; inset: 0; background: rgba(5, 7, 10, .82); display: flex; align-items: center; justify-content: center; z-index: 10; padding: 16px; }
+  #picker[hidden] { display: none; }
+  .pick-card { width: min(720px, 100%); max-height: calc(100vh - 32px); display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .pick-card h2 { margin: 0; font-size: 15px; padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+  .pick-card h2 span { flex: 1; }
+  .pick-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; min-height: 0; overflow: hidden; }
+  .pick-row { display: flex; gap: 8px; }
+  .pick-row input { flex: 1; font-family: var(--mono); font-size: 12px; }
+  .pick-label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+  .recent { display: flex; flex-direction: column; gap: 4px; }
+  .recent-item { display: flex; align-items: center; gap: 6px; }
+  .recent-item button:first-child { flex: 1; text-align: left; font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .browser { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 8px; min-height: 0; flex: 1; overflow: hidden; }
+  .crumb { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid var(--border); background: var(--panel2); }
+  .crumb .p { flex: 1; font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dirs { overflow: auto; max-height: 300px; min-height: 120px; }
+  .dir { display: flex; align-items: center; gap: 8px; padding: 5px 10px; cursor: pointer; border-bottom: 1px solid var(--border); }
+  .dir:hover { background: var(--panel2); }
+  .dir .n { flex: 1; }
+  .pick-foot { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border); }
+  .pick-foot .info { flex: 1; color: var(--muted); font-size: 12px; }
+  .err { color: var(--err); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>⚙️ Mvn Dashboard</h1>
+  <span class="root" id="root"></span>
+  <button id="changeRoot" title="Chọn thư mục khác">📂 Đổi folder</button>
+  <button id="rescan" title="Quét lại module & trạng thái git">↻ Rescan</button>
+</header>
+
+<div id="picker" hidden>
+  <div class="pick-card">
+    <h2><span>📂 Chọn thư mục chứa các project Maven</span><button class="sm" id="pickClose" hidden>✕</button></h2>
+    <div class="pick-body">
+      <div>
+        <div class="pick-row">
+          <input type="text" id="pickPath" placeholder="/đường/dẫn/tới/thư-mục  (Enter để mở)">
+          <button id="pickNative" title="Mở hộp thoại chọn folder của hệ điều hành">Chọn bằng Finder…</button>
+        </div>
+        <div class="err" id="pickErr"></div>
+      </div>
+      <div id="recentWrap">
+        <div class="pick-label">Gần đây</div>
+        <div class="recent" id="recent"></div>
+      </div>
+      <div class="browser">
+        <div class="crumb">
+          <button class="sm" id="pickUp" title="Lên thư mục cha">↑</button>
+          <span class="p" id="crumbPath"></span>
+        </div>
+        <div class="dirs" id="dirs"></div>
+      </div>
+    </div>
+    <div class="pick-foot">
+      <span class="info" id="pickInfo"></span>
+      <button class="primary" id="pickUse">Dùng thư mục này</button>
+    </div>
+  </div>
+</div>
+
+<div class="toolbar">
+  <div class="group">
+    <select id="goals">
+      <option>clean install</option>
+      <option>clean package</option>
+      <option>clean compile</option>
+      <option>clean</option>
+      <option>install</option>
+      <option>test</option>
+      <option value="__custom">Tuỳ chỉnh…</option>
+    </select>
+    <input type="text" id="goalsCustom" placeholder="vd: clean verify" hidden>
+  </div>
+  <div class="group">
+    <label class="chk"><input type="checkbox" id="skipTests" checked> Skip tests</label>
+    <label class="chk"><input type="checkbox" id="offline"> Offline (-o)</label>
+    <label class="chk"><input type="checkbox" id="updateSnapshots"> -U</label>
+    <label class="chk"><input type="checkbox" id="useWrapper" checked> Dùng mvnw</label>
+    <label class="chk"><input type="checkbox" id="stopOnError"> Dừng khi lỗi</label>
+  </div>
+  <div class="group">
+    <select id="javaHome" title="JDK dùng để build"><option value="auto">JDK: tự theo pom</option></select>
+    <input type="text" id="profiles" placeholder="profiles">
+    <input type="text" id="extra" placeholder="args thêm">
+    <label class="chk" title="Số module build song song">∥ <input type="text" id="parallel" value="2"></label>
+  </div>
+  <div class="sep"></div>
+  <div class="group">
+    <button class="primary" id="runSel">▶ Build đã chọn (<span id="selCount">0</span>)</button>
+    <button class="danger" id="cancel" disabled>■ Dừng</button>
+  </div>
+</div>
+
+<main>
+  <section class="modules">
+    <div class="presets" id="presets"></div>
+    <table>
+      <thead><tr>
+        <th style="width:28px"><input type="checkbox" id="checkAll"></th>
+        <th>Module</th><th>Git</th><th>Trạng thái</th><th>Lần cuối</th><th></th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </section>
+
+  <section class="logpane">
+    <div class="loghead">
+      <span class="title" id="logTitle">Log</span>
+      <input type="text" id="logFilter" placeholder="Lọc log…">
+      <label class="chk"><input type="checkbox" id="errOnly"> Chỉ lỗi</label>
+      <label class="chk"><input type="checkbox" id="follow" checked> Auto-scroll</label>
+    </div>
+    <pre id="log"><div class="empty">Chọn một module để xem log</div></pre>
+    <div class="summary" id="summary">Sẵn sàng</div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const S = { modules: {}, order: [], selected: new Set(), active: null, logs: {}, running: false, presets: {} };
+const LS_KEY = 'mvn-dashboard-selected';
+
+const STATUS_LABEL = { idle: 'Chưa build', queued: 'Đang chờ', running: 'Đang build', success: 'Thành công',
+                       failed: 'Lỗi', cancelled: 'Đã huỷ', skipped: 'Bỏ qua' };
+
+const api = (url, body) => fetch(url, body === undefined ? {} : {
+  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+}).then((r) => r.json());
+
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function fmtDur(s) {
+  if (s == null) return '';
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(Math.round(s % 60)).padStart(2, '0')}s`;
+}
+function fmtAgo(ts) {
+  if (!ts) return '';
+  const d = (Date.now() - ts) / 1000;
+  if (d < 60) return 'vừa xong';
+  if (d < 3600) return `${Math.floor(d / 60)} phút trước`;
+  if (d < 86400) return `${Math.floor(d / 3600)} giờ trước`;
+  return new Date(ts).toLocaleDateString('vi-VN');
+}
+
+// -------------------------------------------------------------- loading ----
+
+let firstLoad = true;
+
+async function load(rescan = false) {
+  $('rescan').disabled = true;
+  const data = await api('/api/modules' + (rescan ? '?rescan=1' : ''));
+  $('rescan').disabled = false;
+  applyData(data);
+}
+
+function applyData(data) {
+  const rootChanged = data.root !== S.root;
+  S.root = data.root;
+  S.recentRoots = data.recentRoots || [];
+  $('root').textContent = data.root || 'Chưa chọn folder';
+  $('rescan').disabled = !data.root;
+  S.modules = Object.fromEntries(data.modules.map((m) => [m.name, m]));
+  S.order = data.modules.map((m) => m.name);
+  S.presets = data.presets || {};
+  setRunning(data.running);
+  if (firstLoad) {
+    firstLoad = false;
+    $('javaHome').innerHTML = '<option value="auto">JDK: tự theo pom</option>' + (data.jdks || [])
+      .map((j) => `<option value="${esc(j.home)}" title="${esc(j.label)}">JDK ${esc(j.version)}</option>`).join('');
+    applyOptions(data.options || {});
+  }
+  if (rootChanged) {
+    S.selected = new Set();
+    try { JSON.parse(localStorage.getItem(lsKey()) || '[]').forEach((n) => S.modules[n] && S.selected.add(n)); } catch {}
+    S.active = null;
+    S.logs = {};
+    renderLog();
+    $('logTitle').textContent = 'Log';
+  }
+  renderRows();
+  renderPresets();
+  if (!data.root) showPicker();
+}
+
+// ----------------------------------------------------------- folder pick ----
+
+const lsKey = () => `${LS_KEY}:${S.root || ''}`;
+let browsePath = null;
+
+function showPicker() {
+  $('picker').hidden = false;
+  $('pickClose').hidden = !S.root;
+  $('pickErr').textContent = '';
+  $('recentWrap').hidden = !S.recentRoots.length;
+  $('recent').innerHTML = S.recentRoots.map((r) => `
+    <div class="recent-item">
+      <button data-root="${esc(r)}" title="${esc(r)}">${esc(r)}</button>
+      <button class="sm" data-rmrecent="${esc(r)}" title="Xoá khỏi danh sách">×</button>
+    </div>`).join('');
+  browseTo(S.root || S.recentRoots[0] || '');
+}
+
+function hidePicker() {
+  if (S.root) $('picker').hidden = true;
+}
+
+async function browseTo(p) {
+  const d = await api(`/api/browse?path=${encodeURIComponent(p || '')}`);
+  if (d.error) { $('pickErr').textContent = d.error; return; }
+  $('pickErr').textContent = '';
+  browsePath = d.path;
+  $('pickPath').value = d.path;
+  $('crumbPath').textContent = d.path;
+  $('pickUp').disabled = !d.parent;
+  $('pickUp').dataset.to = d.parent || '';
+  $('dirs').innerHTML = d.dirs.length
+    ? d.dirs.map((x) => `<div class="dir" data-to="${esc(d.path + '/' + x.name)}">📁 <span class="n">${esc(x.name)}</span>${x.hasPom ? '<span class="tag dep">maven</span>' : ''}</div>`).join('')
+    : '<div class="empty">Không có thư mục con</div>';
+  const n = d.pomCount + (d.hasPom ? 1 : 0);
+  $('pickInfo').textContent = n ? `Tìm thấy ${n} project Maven trong thư mục này` : 'Chưa thấy project Maven nào ở đây';
+}
+
+async function openRoot(p) {
+  if (!p) return;
+  $('pickUse').disabled = true;
+  const d = await api('/api/root', { path: p });
+  $('pickUse').disabled = false;
+  if (d.error) { $('pickErr').textContent = d.error; return; }
+  applyData(d);
+  $('picker').hidden = true;
+}
+
+function applyOptions(o) {
+  if (o.goals) {
+    const known = [...$('goals').options].some((x) => x.value === o.goals);
+    $('goals').value = known ? o.goals : '__custom';
+    $('goalsCustom').hidden = known;
+    if (!known) $('goalsCustom').value = o.goals;
+  }
+  for (const k of ['skipTests', 'offline', 'updateSnapshots', 'useWrapper', 'stopOnError']) if (k in o) $(k).checked = !!o[k];
+  if (o.javaHome && [...$('javaHome').options].some((x) => x.value === o.javaHome)) $('javaHome').value = o.javaHome;
+  if (o.profiles != null) $('profiles').value = o.profiles;
+  if (o.extraArgs != null) $('extra').value = o.extraArgs;
+  if (o.parallel != null) $('parallel').value = o.parallel;
+}
+
+function options() {
+  return {
+    goals: $('goals').value === '__custom' ? $('goalsCustom').value.trim() || 'clean install' : $('goals').value,
+    skipTests: $('skipTests').checked, offline: $('offline').checked, updateSnapshots: $('updateSnapshots').checked,
+    useWrapper: $('useWrapper').checked, stopOnError: $('stopOnError').checked, javaHome: $('javaHome').value,
+    profiles: $('profiles').value, extraArgs: $('extra').value, parallel: Number($('parallel').value) || 1,
+  };
+}
+
+// ------------------------------------------------------------ rendering ----
+
+function statusCell(m) {
+  const extra = m.status === 'running' && m.startedAt
+    ? ` <span class="muted" data-tick="${m.startedAt}">${fmtDur(Math.round((Date.now() - m.startedAt) / 1000))}</span>`
+    : m.duration != null ? ` <span class="muted">${fmtDur(m.duration)}</span>` : '';
+  return `<span class="badge s-${m.status}"><span class="dot"></span>${STATUS_LABEL[m.status] || m.status}${extra}</span>`;
+}
+
+function lastCell(m) {
+  if (!m.last) return '<span class="muted">—</span>';
+  const icon = m.last.status === 'success' ? '✅' : m.last.status === 'failed' ? '❌' : '⏹';
+  return `<span title="${esc(m.last.goals)}">${icon} <span class="muted">${fmtAgo(m.last.at)} · ${fmtDur(m.last.duration)}</span></span>`;
+}
+
+function gitCell(g) {
+  if (!g) return '<span class="muted">—</span>';
+  let s = `<span class="tag" title="branch">⎇ ${esc(g.branch)}</span>`;
+  if (g.dirty) s += `<span class="tag dirty" title="file thay đổi chưa commit">●${g.dirty}</span>`;
+  if (g.ahead) s += `<span class="tag" title="commit chưa push">↑${g.ahead}</span>`;
+  if (g.behind) s += `<span class="tag" title="commit chưa pull">↓${g.behind}</span>`;
+  return s;
+}
+
+function rowHtml(m) {
+  const deps = m.deps.map((d) => `<span class="tag dep" title="phụ thuộc">→ ${esc(d)}</span>`).join('');
+  return `
+    <td><input type="checkbox" data-sel="${esc(m.name)}" ${S.selected.has(m.name) ? 'checked' : ''}></td>
+    <td><div class="name">${esc(m.name)} ${m.hasWrapper ? '' : '<span class="tag" title="Không có mvnw, sẽ dùng mvn">no mvnw</span>'}</div>
+        <div class="sub">${esc(m.artifactId)}:${esc(m.version || '?')} ${m.javaVersion ? `<span class="tag">☕ ${esc(m.javaVersion)}</span>` : ''}${deps}</div></td>
+    <td>${gitCell(m.git)}</td>
+    <td data-status>${statusCell(m)}</td>
+    <td data-last>${lastCell(m)}</td>
+    <td class="actions">
+      <button class="sm" data-build="${esc(m.name)}" title="Build riêng module này" ${S.running ? 'disabled' : ''}>▶</button>
+      <button class="sm" data-open="${esc(m.name)}" title="Mở trong Finder">📁</button>
+      <button class="sm" data-idea="${esc(m.name)}" title="Mở bằng IntelliJ IDEA">IJ</button>
+    </td>`;
+}
+
+function renderRows() {
+  if (!S.order.length) {
+    $('rows').innerHTML = `<tr><td colspan="6" class="empty">${S.root ? 'Không có thư mục con nào chứa pom.xml' : 'Chưa chọn folder'}</td></tr>`;
+    return updateSelection();
+  }
+  $('rows').innerHTML = S.order.map((n) =>
+    `<tr class="row ${S.active === n ? 'active' : ''}" data-row="${esc(n)}">${rowHtml(S.modules[n])}</tr>`).join('');
+  updateSelection();
+}
+
+function updateRow(name) {
+  const tr = document.querySelector(`tr[data-row="${CSS.escape(name)}"]`);
+  if (!tr) return;
+  tr.querySelector('[data-status]').innerHTML = statusCell(S.modules[name]);
+  tr.querySelector('[data-last]').innerHTML = lastCell(S.modules[name]);
+}
+
+function updateSelection() {
+  $('selCount').textContent = S.selected.size;
+  $('runSel').disabled = S.running || !S.selected.size;
+  $('checkAll').checked = S.selected.size && S.selected.size === S.order.length;
+  $('checkAll').indeterminate = S.selected.size > 0 && S.selected.size < S.order.length;
+  $('checkAll').disabled = !S.order.length;
+  if (S.root) try { localStorage.setItem(lsKey(), JSON.stringify([...S.selected])); } catch {}
+}
+
+function renderPresets() {
+  const items = Object.entries(S.presets).map(([name, mods]) =>
+    `<span class="preset"><button data-preset="${esc(name)}" title="${esc(mods.join(', '))}">${esc(name)} <span class="muted">${mods.length}</span></button><button data-delpreset="${esc(name)}" title="Xoá preset">×</button></span>`).join('');
+  $('presets').innerHTML = `<span class="muted">Preset:</span> ${items || '<span class="muted">chưa có</span>'}
+    <button class="sm" id="savePreset" title="Lưu các module đang chọn thành preset">+ Lưu lựa chọn</button>`;
+}
+
+function setRunning(r) {
+  S.running = r;
+  $('cancel').disabled = !r;
+  document.querySelectorAll('[data-build]').forEach((b) => (b.disabled = r));
+  updateSelection();
+}
+
+// ------------------------------------------------------------------ log ----
+
+function classify(line) {
+  if (line.startsWith('$ ')) return 'cmd';
+  if (line.startsWith('[dashboard]')) return 'dash';
+  if (/^\[(ERROR|FATAL)\]|BUILD FAILURE|COMPILATION ERROR/.test(line)) return 'e';
+  if (/^\[WARN(ING)?\]/.test(line)) return 'w';
+  if (/BUILD SUCCESS/.test(line)) return 'ok';
+  return '';
+}
+
+function lineVisible(line) {
+  const f = $('logFilter').value.toLowerCase();
+  if ($('errOnly').checked && !['e', 'cmd', 'dash'].includes(classify(line))) return false;
+  return !f || line.toLowerCase().includes(f);
+}
+
+function lineNode(line) {
+  const div = document.createElement('div');
+  const c = classify(line);
+  if (c) div.className = c;
+  div.textContent = line || ' ';
+  return div;
+}
+
+function renderLog() {
+  const pre = $('log');
+  if (!S.active) { pre.innerHTML = '<div class="empty">Chọn một module để xem log</div>'; return; }
+  const lines = (S.logs[S.active] || []).filter(lineVisible);
+  pre.textContent = '';
+  if (!lines.length) { pre.innerHTML = '<div class="empty">Chưa có log</div>'; return; }
+  const frag = document.createDocumentFragment();
+  lines.forEach((l) => frag.appendChild(lineNode(l)));
+  pre.appendChild(frag);
+  if ($('follow').checked) pre.scrollTop = pre.scrollHeight;
+}
+
+// Gom các dòng log mới, vẽ mỗi frame một lần cho nhẹ
+let pendingLines = [];
+function flushLog() {
+  const pre = $('log');
+  if (pendingLines.length) {
+    pre.querySelector('.empty')?.remove();
+    const frag = document.createDocumentFragment();
+    pendingLines.filter(lineVisible).forEach((l) => frag.appendChild(lineNode(l)));
+    pre.appendChild(frag);
+    while (pre.childElementCount > 20000) pre.firstChild.remove();
+    pendingLines = [];
+    if ($('follow').checked) pre.scrollTop = pre.scrollHeight;
+  }
+  requestAnimationFrame(flushLog);
+}
+requestAnimationFrame(flushLog);
+
+async function selectModule(name) {
+  S.active = name;
+  document.querySelectorAll('tr.row').forEach((tr) => tr.classList.toggle('active', tr.dataset.row === name));
+  $('logTitle').textContent = `Log · ${name}`;
+  const data = await api(`/api/log?module=${encodeURIComponent(name)}`);
+  S.logs[name] = data.lines;
+  pendingLines = [];
+  renderLog();
+}
+
+// --------------------------------------------------------------- events ----
+
+function connect() {
+  const es = new EventSource('/api/events');
+  es.onmessage = (ev) => {
+    const e = JSON.parse(ev.data);
+    if (e.type === 'log') {
+      (S.logs[e.module] ||= []).push(e.line);
+      if (e.module === S.active) pendingLines.push(e.line);
+    } else if (e.type === 'status') {
+      const m = S.modules[e.module];
+      if (!m) return;
+      Object.assign(m, { status: e.status, duration: e.duration, startedAt: e.startedAt });
+      if (e.status === 'running') { S.logs[e.module] = []; if (!S.active || S.modules[S.active]?.status !== 'running') selectModule(e.module); }
+      if (['success', 'failed', 'cancelled'].includes(e.status)) m.last = { status: e.status, at: Date.now(), duration: e.duration, goals: options().goals };
+      updateRow(e.module);
+      updateSummary();
+    } else if (e.type === 'batch') {
+      setRunning(e.running);
+      if (!e.running) {
+        updateSummary(e);
+        notify(e);
+        load(true);
+      }
+    }
+  };
+  es.onerror = () => { $('summary').textContent = 'Mất kết nối server… đang thử lại'; };
+}
+
+function updateSummary(final) {
+  const counts = {};
+  Object.values(S.modules).forEach((m) => (counts[m.status] = (counts[m.status] || 0) + 1));
+  if (final) {
+    $('summary').innerHTML = `Xong: <b style="color:var(--ok)">${final.ok.length} OK</b>` +
+      (final.failed.length ? ` · <b style="color:var(--err)">${final.failed.length} lỗi</b> (${esc(final.failed.join(', '))})` : '');
+    return;
+  }
+  if (!S.running) return;
+  $('summary').textContent = ['running', 'queued', 'success', 'failed', 'skipped']
+    .filter((k) => counts[k]).map((k) => `${STATUS_LABEL[k]}: ${counts[k]}`).join(' · ');
+}
+
+function notify(e) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  new Notification(e.failed.length ? '❌ Build có lỗi' : '✅ Build xong',
+    { body: e.failed.length ? `Lỗi: ${e.failed.join(', ')}` : `${e.ok.length} module thành công` });
+}
+
+// ---------------------------------------------------------------- build ----
+
+async function build(names) {
+  if (!names.length) return;
+  if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
+  const r = await api('/api/build', { modules: names, options: options() });
+  if (r.error) alert(r.error);
+  else setRunning(true);
+}
+
+// --------------------------------------------------------------- wiring ----
+
+$('rows').addEventListener('click', (ev) => {
+  const t = ev.target;
+  if (t.dataset.sel) {
+    t.checked ? S.selected.add(t.dataset.sel) : S.selected.delete(t.dataset.sel);
+    return updateSelection();
+  }
+  if (t.dataset.build) return build([t.dataset.build]);
+  if (t.dataset.open) return api('/api/open', { module: t.dataset.open });
+  if (t.dataset.idea) return api('/api/open', { module: t.dataset.idea, app: 'IntelliJ IDEA' });
+  const tr = t.closest('tr.row');
+  if (tr) selectModule(tr.dataset.row);
+});
+
+$('checkAll').addEventListener('change', (ev) => {
+  S.selected = ev.target.checked ? new Set(S.order) : new Set();
+  renderRows();
+});
+
+$('presets').addEventListener('click', async (ev) => {
+  const t = ev.target.closest('button');
+  if (!t) return;
+  if (t.id === 'savePreset') {
+    if (!S.selected.size) return alert('Chọn ít nhất một module trước');
+    const name = prompt('Tên preset:', '');
+    if (!name) return;
+    S.presets = (await api('/api/presets', { name, modules: [...S.selected] })).presets;
+  } else if (t.dataset.preset) {
+    S.selected = new Set(S.presets[t.dataset.preset].filter((n) => S.modules[n]));
+    renderRows();
+    return;
+  } else if (t.dataset.delpreset) {
+    if (!confirm(`Xoá preset "${t.dataset.delpreset}"?`)) return;
+    S.presets = (await api('/api/presets', { name: t.dataset.delpreset, delete: true })).presets;
+  }
+  renderPresets();
+});
+
+$('goals').addEventListener('change', () => { $('goalsCustom').hidden = $('goals').value !== '__custom'; });
+$('runSel').addEventListener('click', () => build(S.order.filter((n) => S.selected.has(n))));
+$('cancel').addEventListener('click', () => api('/api/cancel', {}));
+$('rescan').addEventListener('click', () => load(true));
+
+$('changeRoot').addEventListener('click', () => {
+  if (S.running) return alert('Đang build, dừng trước khi đổi folder');
+  showPicker();
+});
+$('pickClose').addEventListener('click', hidePicker);
+$('picker').addEventListener('keydown', (ev) => { if (ev.key === 'Escape') hidePicker(); });
+$('pickUp').addEventListener('click', (ev) => browseTo(ev.currentTarget.dataset.to));
+$('pickUse').addEventListener('click', () => openRoot(browsePath));
+$('pickPath').addEventListener('keydown', (ev) => {
+  if (ev.key === 'Enter') browseTo($('pickPath').value.trim());
+});
+$('dirs').addEventListener('click', (ev) => {
+  const d = ev.target.closest('[data-to]');
+  if (d) browseTo(d.dataset.to);
+});
+$('dirs').addEventListener('dblclick', (ev) => {
+  const d = ev.target.closest('[data-to]');
+  if (d) openRoot(d.dataset.to);
+});
+$('recent').addEventListener('click', async (ev) => {
+  const t = ev.target.closest('button');
+  if (!t) return;
+  if (t.dataset.root) return openRoot(t.dataset.root);
+  if (t.dataset.rmrecent) {
+    S.recentRoots = (await api('/api/recent/remove', { path: t.dataset.rmrecent })).recentRoots;
+    t.closest('.recent-item').remove();
+    $('recentWrap').hidden = !S.recentRoots.length;
+  }
+});
+$('pickNative').addEventListener('click', async () => {
+  const btn = $('pickNative');
+  btn.disabled = true;
+  btn.textContent = 'Đang mở hộp thoại…';
+  const r = await api('/api/pick', {});
+  btn.disabled = false;
+  btn.textContent = 'Chọn bằng Finder…';
+  if (r.unsupported) $('pickErr').textContent = 'Hệ điều hành này không hỗ trợ, hãy duyệt hoặc nhập đường dẫn';
+  else if (r.path) openRoot(r.path);
+});
+$('logFilter').addEventListener('input', renderLog);
+$('errOnly').addEventListener('change', renderLog);
+
+// đồng hồ cho module đang chạy
+setInterval(() => {
+  document.querySelectorAll('[data-tick]').forEach((el) => (el.textContent = fmtDur(Math.round((Date.now() - Number(el.dataset.tick)) / 1000))));
+}, 1000);
+
+load().then(connect);
+</script>
+</body>
+</html>
