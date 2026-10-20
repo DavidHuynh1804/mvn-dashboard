@@ -6,6 +6,7 @@
 <title>Mvn Dashboard</title>
 <style>
   :root {
+    color-scheme: dark;
     --bg: #0f1115; --panel: #161a21; --panel2: #1c212a; --border: #2a303b;
     --text: #d7dce4; --muted: #8a93a3; --accent: #4c8dff;
     --ok: #3fb950; --err: #f85149; --warn: #d29922; --run: #58a6ff; --skip: #8b949e;
@@ -37,8 +38,14 @@
   #profiles { width: 110px; } #extra { width: 160px; }
   #parallel { width: 52px; }
 
-  main { display: grid; grid-template-columns: minmax(520px, 1.1fr) 1fr; min-height: 0; }
-  @media (max-width: 1000px) { main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } }
+  main { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); min-height: 0; }
+  main > section { min-width: 0; min-height: 0; }
+  /* Màn hẹp (vd. pane browser trong Orca/IDE): danh sách ở trên, log ở dưới */
+  @media (max-width: 1360px) {
+    main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1.25fr) minmax(0, 1fr); }
+    .modules { border-right: none; border-bottom: 1px solid var(--border); }
+  }
+  .loghead { flex-wrap: wrap; row-gap: 6px; }
 
   .modules { overflow: auto; border-right: 1px solid var(--border); }
   .presets { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); z-index: 2; }
@@ -64,11 +71,17 @@
   .s-running .dot { background: var(--run); animation: pulse 1s infinite; } .s-queued .dot { background: var(--warn); }
   .s-cancelled .dot, .s-skipped .dot { background: var(--skip); }
   @keyframes pulse { 50% { opacity: .3; } }
-  .actions { white-space: nowrap; text-align: right; }
+  .actions { white-space: nowrap; text-align: right; width: 1%; }
+  .actions .btns { display: inline-flex; gap: 3px; align-items: center; }
+  .namecell .name { white-space: nowrap; }
+  td[data-git] { white-space: nowrap; }
+  td[data-git] button.tag { max-width: 170px; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+  td[data-status] { white-space: nowrap; }
 
   .logpane { display: flex; flex-direction: column; min-height: 0; }
   .loghead { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--panel); }
-  .loghead .title { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .loghead .title { font-weight: 600; flex: 0 1 auto; min-width: 40px; max-width: 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .loghead #logFilter { flex: 1; min-width: 80px; width: auto; }
   #logFilter { width: 160px; }
   #log { flex: 1; overflow: auto; margin: 0; padding: 10px 12px; font: 12px/1.45 var(--mono); white-space: pre-wrap; word-break: break-all; background: #0b0d11; }
   #log .e { color: var(--err); } #log .w { color: var(--warn); } #log .ok { color: var(--ok); font-weight: 600; }
@@ -110,12 +123,22 @@
   .warnbox { color: var(--warn); font-size: 12px; }
 
   /* ---- cây module ---- */
-  tr.child td { background: rgba(255,255,255,.012); }
-  tr.child .name { font-weight: 500; }
+  /* mỗi project là một nhóm: dòng project nền đậm, module con thụt vào nối bằng nét cây */
+  tr.gap td { height: 10px; padding: 0; border: none; background: transparent !important; }
+  tr.head td { background: var(--panel); border-top: 1px solid var(--border); }
+  tr.head .name { font-size: 13.5px; }
+  tr.head.has-kids td:first-child, tr.child td:first-child { box-shadow: inset 3px 0 0 #2d4a7a; }
+  tr.child td { background: var(--bg); padding-top: 5px; padding-bottom: 5px; border-bottom-color: rgba(42, 48, 59, .55); }
+  tr.child.last td { border-bottom-color: var(--border); }
+  tr.child .name { font-weight: 500; display: flex; align-items: center; gap: 4px; }
+  tr.child .namecell { padding-left: 14px; }
+  tr.child .sub { padding-left: 34px; }
+  tr.row.head:hover td, tr.row.child:hover td { background: var(--panel2); }
+  tr.row.active td { background: #1f2a3d !important; }
+  .branch { font-family: var(--mono); color: #4a5363; margin-right: 4px; letter-spacing: -1px; }
   .tw { background: none; border: none; padding: 0 4px 0 0; color: var(--muted); cursor: pointer; font-size: 11px; width: 16px; }
-  .tw-sp { display: inline-block; width: 16px; color: var(--muted); }
-  tr.child .namecell { padding-left: 26px; }
-  .tag.sub { color: #c297ff; border-color: #5b3f8a; }
+  .tw-sp { display: inline-block; width: 16px; }
+  .tag.submod { color: #c297ff; border-color: #5b3f8a; }
   .appline { margin-top: 3px; }
   .appline a { color: var(--accent); }
 
@@ -129,6 +152,9 @@
   #termWrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: #0b0d11; }
   #termWrap[hidden] { display: none; }
   #term { flex: 1; min-height: 0; padding: 6px 0 0 8px; }
+  #term .xterm-viewport { background-color: #0b0d11 !important; }
+  #term .xterm-viewport::-webkit-scrollbar { width: 8px; background: #0b0d11; }
+  #term .xterm-viewport::-webkit-scrollbar-thumb { background: #2a303b; border-radius: 4px; }
   [hidden] { display: none !important; }
 
   /* ---- menu mở bằng ---- */
@@ -248,7 +274,7 @@
     <table>
       <thead><tr>
         <th style="width:28px"><input type="checkbox" id="checkAll"></th>
-        <th>Module</th><th>Git</th><th>Trạng thái</th><th>Lần cuối</th><th></th>
+        <th>Module</th><th>Git</th><th>Build / App</th><th></th>
       </tr></thead>
       <tbody id="rows"></tbody>
     </table>
@@ -458,8 +484,10 @@ function appBadge(m) {
 
 const appActive = (m) => ['starting', 'up', 'stopping'].includes(m?.app?.status);
 
+// Đang build/chạy lệnh thì hiện trạng thái live; còn lại hiện kết quả lần build gần nhất
 function statusCell(m) {
-  return buildBadge(m) + appBadge(m);
+  const live = m.busy || ['running', 'queued'].includes(m.status);
+  return (live || !m.last ? buildBadge(m) : lastCell(m)) + appBadge(m);
 }
 
 function buildBadge(m) {
@@ -471,9 +499,9 @@ function buildBadge(m) {
 }
 
 function lastCell(m) {
-  if (!m.last) return '<span class="muted">—</span>';
-  const icon = m.last.status === 'success' ? '✅' : m.last.status === 'failed' ? '❌' : '⏹';
-  return `<span title="${esc(m.last.goals)}">${icon} <span class="muted">${fmtAgo(m.last.at)} · ${fmtDur(m.last.duration)}</span></span>`;
+  const l = m.last;
+  return `<span class="badge s-${l.status}" title="${esc(l.goals)}"><span class="dot"></span>${STATUS_LABEL[l.status] || l.status}`
+    + ` <span class="muted">${fmtAgo(l.at)} · ${fmtDur(l.duration)}</span></span>`;
 }
 
 function gitCell(g, name) {
@@ -488,13 +516,19 @@ function gitCell(g, name) {
 }
 
 function rowHtml(m) {
-  const deps = m.deps.map((d) => `<span class="tag dep" title="phụ thuộc">→ ${esc(d.split('/').pop())}</span>`).join('');
   const kids = m.children?.length || 0;
+  const parent = m.parent && S.modules[m.parent];
+  const isLast = parent && parent.children[parent.children.length - 1] === m.name;
   const toggle = kids
     ? `<button class="tw" data-toggle="${esc(m.name)}" title="Thu gọn / mở rộng">${S.collapsed.has(m.name) ? '▸' : '▾'}</button>`
-    : `<span class="tw-sp">${m.parent ? '↳' : ''}</span>`;
+    : m.parent ? `<span class="branch">${isLast ? '└─' : '├─'}</span>` : '<span class="tw-sp"></span>';
+  // Module con: bỏ version/java/phụ thuộc (trùng với project cha) cho gọn
+  const sub = m.parent
+    ? (m.artifactId && m.artifactId !== m.rel ? esc(m.artifactId) : '')
+    : `${esc(m.artifactId)}:${esc(m.version || '?')} ${m.javaVersion ? `<span class="tag">☕ ${esc(m.javaVersion)}</span>` : ''}`
+      + m.deps.map((d) => `<span class="tag dep" title="phụ thuộc">→ ${esc(d)}</span>`).join('');
   const kind = m.parent
-    ? (m.isSubmodule ? '<span class="tag sub" title="git submodule: branch độc lập">submodule</span>' : '<span class="tag">module</span>')
+    ? (m.isSubmodule ? '<span class="tag submod" title="git submodule: branch độc lập">submodule</span>' : '<span class="tag">module</span>')
     : (kids ? `<span class="tag" title="Build project = build cả ${kids} module con">${kids} module</span>` : '');
   const wrapperTag = m.parent || m.hasWrapper ? '' : '<span class="tag" title="Không có mvnw, sẽ dùng mvn">no mvnw</span>';
   const app = appActive(m)
@@ -503,26 +537,32 @@ function rowHtml(m) {
   return `
     <td><input type="checkbox" data-sel="${esc(m.name)}" ${S.selected.has(m.name) ? 'checked' : ''}></td>
     <td class="namecell"><div class="name">${toggle}${esc(m.parent ? m.rel : m.name)} ${kind}${wrapperTag}</div>
-        <div class="sub">${esc(m.artifactId)}:${esc(m.version || '?')} ${m.javaVersion ? `<span class="tag">☕ ${esc(m.javaVersion)}</span>` : ''}${deps}</div></td>
+        ${sub ? `<div class="sub">${sub}</div>` : ''}</td>
     <td data-git>${gitCell(m.git, m.name)}</td>
     <td data-status>${statusCell(m)}</td>
-    <td data-last>${lastCell(m)}</td>
-    <td class="actions">
+    <td class="actions"><div class="btns">
       <button class="sm" data-build="${esc(m.name)}" title="Build riêng ${m.parent ? 'module này (-pl ' + esc(m.rel) + ')' : 'project này'}" ${S.running ? 'disabled' : ''}>🔨</button>
       ${app}
-      <button class="sm" data-term="${esc(m.name)}" title="Mở terminal tại thư mục này">⌨</button>
+      <button class="sm" data-term="${esc(m.name)}" title="Mở terminal tại thư mục này" style="font-family:var(--mono);font-size:11px">&gt;_</button>
       <span class="split"><button class="sm" data-open="${esc(m.name)}" title="Mở bằng ${esc(defaultOpenerLabel())}">↗</button><button class="sm" data-openmenu="${esc(m.name)}" title="Chọn app để mở">▾</button></span>
-    </td>`;
+    </div></td>`;
 }
 
 function renderRows() {
   if (!S.order.length) {
-    $('rows').innerHTML = `<tr><td colspan="6" class="empty">${S.root ? 'Không có thư mục con nào chứa pom.xml' : 'Chưa chọn folder'}</td></tr>`;
+    $('rows').innerHTML = `<tr><td colspan="5" class="empty">${S.root ? 'Không có thư mục con nào chứa pom.xml' : 'Chưa chọn folder'}</td></tr>`;
     return updateSelection();
   }
+  const rowTr = (m, cls) => `<tr class="row ${cls} ${S.active === m.name ? 'active' : ''}" data-row="${esc(m.name)}">${rowHtml(m)}</tr>`;
   $('rows').innerHTML = S.order
-    .filter((n) => !S.collapsed.has(S.modules[n].parent))
-    .map((n) => `<tr class="row ${S.modules[n].parent ? 'child' : ''} ${S.active === n ? 'active' : ''}" data-row="${esc(n)}">${rowHtml(S.modules[n])}</tr>`)
+    .map((n) => S.modules[n])
+    .filter((m) => !m.parent)
+    .map((top, i) => {
+      const kids = S.collapsed.has(top.name) ? [] : top.children.map((c) => S.modules[c]).filter(Boolean);
+      return (i ? '<tr class="gap"><td colspan="5"></td></tr>' : '')
+        + rowTr(top, `head ${top.children.length ? 'has-kids' : ''}`)
+        + kids.map((k, j) => rowTr(k, `child ${j === kids.length - 1 ? 'last' : ''}`)).join('');
+    })
     .join('');
   updateSelection();
 }
@@ -530,9 +570,6 @@ function renderRows() {
 function updateRow(name) {
   const tr = document.querySelector(`tr[data-row="${CSS.escape(name)}"]`);
   if (!tr) return;
-  tr.querySelector('[data-status]').innerHTML = statusCell(S.modules[name]);
-  tr.querySelector('[data-git]').innerHTML = gitCell(S.modules[name].git, name);
-  tr.querySelector('[data-last]').innerHTML = lastCell(S.modules[name]);
   tr.innerHTML = rowHtml(S.modules[name]);
 }
 
@@ -725,7 +762,7 @@ async function showTerminal(name) {
   T.pending = '';
   T.term.reset();
   T.term.write(r.buffer);
-  $('termCwd').textContent = `⌨ ${r.cwd}`;
+  $('termCwd').textContent = `>_ ${r.cwd}`;
   // Terminal có thể đã mở trước đó với kích thước khác
   api('/api/term/resize', { id: T.id, rows: T.term.rows, cols: T.term.cols });
   T.term.focus();
